@@ -1,4 +1,4 @@
-# Masenko [![Test](https://github.com/husio/masenko/workflows/Test/badge.svg)](https://github.com/husio/masenko/actions)
+# Masenko [![Test](https://github.com/husio/masenko/workflows/Test/badge.svg)](https://github.com/husio/masenko/actions) [![](https://readthedocs.org/projects/masenko/badge/?version=latest&style=plastic)](https://masenko.readthedocs.io/en/latest/)
 
 
 
