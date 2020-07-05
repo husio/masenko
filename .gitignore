@@ -1,0 +1,7 @@
+.*
+!.gitignore
+__pycache__
+.mypy_cache
+bin
+docs/_build/
+.venv

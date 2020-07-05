@@ -1,0 +1,52 @@
+client-a send ATOMIC
+client-a send PUSH {"name": "first"}
+client-a send PUSH {"name": "second"}
+client-a send PUSH {"name": "third"}
+client-a send DONE
+client-a recv OK {}
+
+client-a send INFO
+client-a recv OK {"queues":[{"name":"default","ready":3,"delayed":0,"to_ack":0}],"metrics":{"ack":0,"clients":1,"fetch":0,"nack":0,"push":3,"request":1,"request-error":0}}
+
+client-a send FETCH
+client-a recv OK {"id":1,"queue":"default","name":"first"}
+
+client-a send FETCH
+client-a recv OK {"id":2,"queue":"default","name":"second"}
+
+client-a send FETCH
+client-a recv OK {"id":3,"queue":"default","name":"third"}
+
+
+# Executing an atomic operation that failed must not change state.
+client-a send ATOMIC
+client-a send PUSH {"name": "a"}
+client-a send PUSH {"name": "b"}
+client-a send ACK {"id": 1}
+client-a send ACK {"id": 2}
+# NACK is not supported. This operation must fail.
+client-a send NACK {"id": 3}
+client-a send PUSH {"name": "c"}
+client-a send DONE
+client-a recv ERR {"msg":"NACK is not allowed in transaction."}
+
+client-a send INFO
+client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":3}],"metrics":{"ack":0,"clients":1,"fetch":3,"nack":0,"push":3,"request":6,"request-error":1}}
+
+
+client-a send ATOMIC
+client-a send PUSH {"name": "fourth"}
+client-a send ACK {"id": 1}
+client-a send ACK {"id": 2}
+client-a send DONE
+client-a recv OK {}
+
+client-a send INFO
+client-a recv OK {"queues":[{"name":"default","ready":1,"delayed":0,"to_ack":1}],"metrics":{"ack":2,"clients":1,"fetch":3,"nack":0,"push":4,"request":8,"request-error":1}}
+
+# ID of the fourth task is 6, because incrementing ID is not part of the transaction.
+client-a send FETCH
+client-a recv OK {"id":6,"queue":"default","name":"fourth"}
+
+client-a send QUIT
+client-a recv OK {}

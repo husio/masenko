@@ -1,0 +1,20 @@
+client send PUSH {"name": "testtask", "retry": 1, "deadqueue": "dead"}
+client recv OK {"id":1}
+
+client send FETCH
+client recv OK {"id":1,"queue":"default","name":"testtask"}
+
+client send NACK {"id": 1}
+client recv OK {}
+
+client send FETCH {"timeout": "2.5s"}
+client recv OK {"id":1,"queue":"default","name":"testtask","failures":1}
+
+client send NACK {"id": 1}
+client recv OK {}
+
+client send FETCH {"queues": ["dead"]}
+client recv OK {"id":1,"queue":"dead","name":"testtask"}
+
+client-a send QUIT
+client-a recv OK {}

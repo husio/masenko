@@ -1,0 +1,5 @@
+client-a send PUSH {"name": "my-task-name"}
+client-a recv OK {"id":1}
+
+client-a send QUIT
+client-a recv OK {}

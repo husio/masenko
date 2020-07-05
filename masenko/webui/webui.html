@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <title>Task Queue</title>
+<style>
+body { font-size: 180%; width: 100%; margin: 40px 0; padding:0;}
+canvas { margin: 10px 0; }
+div.smoothie-chart-tooltip {
+  background: #444;
+  padding: 1em;
+  margin-top: 20px;
+  font-family: consolas;
+  color: white;
+  font-size: 10px;
+  pointer-events: none;
+}
+.legend-box { width: 20px; height: 20px; margin-right: 10px; display: inline-block; }
+</style>
+<script type="text/javascript" src="/smoothie.js"></script>
+</head>
+<body>
+  <div>
+    <code id="info"></code>
+  </div>
+  <canvas id="stats" width="800px" height="400px"></canvas>
+  <div id="legend"></div>
+</body>
+<script>
+
+var lines = {}
+
+var counters =  [
+  {name: "ready", color: "#c10000", width: 3},
+  {name: "delayed", color: "#CE6003", width: 3},
+  {name: "to_ack", color: "#4B54E7", width: 3},
+]
+
+function render(smoothie, data) {
+  info.innerHTML = JSON.stringify(data)
+
+  for (var i = 0; i< data.queues.length; i++) {
+    var q = data.queues[i]
+    for (var j in counters) {
+      var counter = counters[j]
+      var line = lines[q.name + ":" + counter.name]
+      if (!line) {
+        line = new TimeSeries()
+        smoothie.addTimeSeries(line, {
+          strokeStyle: counter.color,
+          lineWidth: counter.width,
+        })
+        lines[q.name + ":" + counter.name] = line
+      }
+      line.append(new Date().getTime(), q[counter.name])
+      console.log(q.name, counter, q[counter])
+    }
+  }
+}
+
+function stats(cb) {
+  var req = new XMLHttpRequest();
+  req.open('GET', '/stats.json', true);
+  req.onload = function() {
+    if (this.status === 200) {
+      cb(JSON.parse(this.response))
+    }
+  }
+  req.send()
+}
+
+var info
+
+function renderLegend(dest) {
+  var chunks = []
+  for (var i in counters) {
+    var c = counters[i]
+    chunks.push('<div><span class="legend-box" style="background:' + c.color + '"></span>' + c.name + '</div>')
+  }
+  dest.innerHTML = chunks.join('\n')
+}
+
+window.addEventListener("load", function() {
+  var smoothie = new SmoothieChart({
+      millisPerPixel: 50,
+      tooltip: true,
+      grid: {
+        labels: {disabled: true},
+        borderVisible: false,
+        strokeStyle:'#ececec',
+        verticalSections: 0,
+        fillStyle:'#fff',
+        lineWidth: 2,
+      },
+      labels: { fillStyle:'#383838' }
+  })
+  smoothie.streamTo(document.getElementById("stats"));
+
+  info = document.getElementById("info")
+
+  setInterval(function() {
+    stats(function(data) { render(smoothie, data) })
+  }, 500)
+
+  renderLegend(document.getElementById('legend'))
+})
+
+</script>
+</html>

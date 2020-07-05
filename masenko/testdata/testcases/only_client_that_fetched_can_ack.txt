@@ -1,0 +1,30 @@
+client-a send PUSH {"name": "first"}
+client-a recv OK {"id":1}
+
+client-a send FETCH
+client-a recv OK {"id":1,"queue":"default","name":"first"}
+
+# Client B did not fetch the message, so ACK must fail.
+
+client-b send ACK {"id":1}
+client-b recv ERR {"msg":"task not acquired"}
+
+# Client B did not fetch the message, so NACK must fail.
+
+client-b send NACK {"id":1}
+client-b recv ERR {"msg":"task not acquired"}
+
+client-a send NACK {"id":1}
+client-a recv OK {}
+
+# Client B can fetch the message because it was returned. Once fetched, can be
+# ACKed by B
+
+client-b send FETCH
+client-b recv OK {"id":1,"queue":"default","name":"first","failures":1}
+
+client-b send ACK {"id":1}
+client-b recv OK {}
+
+client-a send QUIT
+client-a recv OK {}

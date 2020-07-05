@@ -1,0 +1,5 @@
+client-a send PUSH {"queue": "my-task-queue"}
+client-a recv ERR {"msg":"invalid task name \"\""}
+
+client-a send QUIT
+client-a recv OK {}

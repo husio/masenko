@@ -1,0 +1,9 @@
+# ExecuteAt is for sure in the past.
+client-a send PUSH {"name": "first", "queue": "my-queue", "deadqueue": "deadq", "execute_at": "1990-02-23T12:42:12Z", "retry": 8, "payload": ["foo", "baz", "bar"]}
+client-a recv OK {"id":1}
+
+client-a send FETCH {"queues": ["my-queue"]}
+client-a recv OK {"id":1,"queue":"my-queue","name":"first","payload":["foo","baz","bar"]}
+
+client-a send QUIT
+client-a recv OK {}
