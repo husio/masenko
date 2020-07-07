@@ -1,6 +1,11 @@
 Welcome to Masenko
 ------------------
 
+Masenko is an open source (`MIT licensed <https://github.com/husio/masenko/blob/unstable/LICENSE>`_), language agnostic, background task processing manager with a focus on simplicity, reliability and clean interface.
+
+
+---
+
 * Plain text protocol.
 * Tasks are pushed to queue by clients.
 * Tasks are explicitly fetched from queues by clients (no subscription).
