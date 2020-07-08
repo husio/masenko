@@ -22,6 +22,9 @@ class Transaction:
         retry: int = None,
         execute_at: datetime.datetime = None,
     ) -> None:
+        """
+        Publish a task.
+        """
         request: Dict[str, Any] = {"name": task_name}
         if queue:
             request["queue"] = queue
@@ -63,6 +66,8 @@ class Client:
         return self._client.is_connected()
 
     def connect(self, host: str, port: int) -> None:
+        """
+        """
         with self._lock:
             self._client.connect(host, port)
             # A heartbeat ping activity is maintained in the background.
@@ -73,16 +78,22 @@ class Client:
                 self._heartbeat.start()
 
     def disconnect(self) -> None:
+        """
+        """
         with self._lock:
             self._client.disconnect()
             self._heartbeat.join()
 
     def quit(self) -> None:
+        """
+        """
         with self._lock:
             self._client.quit()
             self._update_last_request_time()
 
     def ping(self) -> None:
+        """
+        """
         with self._lock:
             self._client.ping()
             self._update_last_request_time()
@@ -97,6 +108,8 @@ class Client:
         retry: int = None,
         execute_at: datetime.datetime = None,
     ) -> int:
+        """
+        """
         with self._lock:
             res = self._client.push(
                 task_name=task_name,
@@ -115,23 +128,31 @@ class Client:
         *,
         timeout: Union[int, str] = None,
     ) -> Any:
+        """
+        """
         with self._lock:
             res = self._client.fetch(queues=queues, timeout=timeout)
             self._update_last_request_time()
             return res
 
     def ack(self, task_id: int) -> None:
+        """
+        """
         with self._lock:
             self._client.ack(task_id=task_id)
             self._update_last_request_time()
 
     def nack(self, task_id: int) -> None:
+        """
+        """
         with self._lock:
             self._client.nack(task_id=task_id)
             self._update_last_request_time()
 
     @contextmanager
     def atomic(self) -> Iterator[Transaction]:
+        """
+        """
         with self._lock:
             with self._client.atomic() as tx:
                 yield tx
@@ -159,9 +180,15 @@ class BareClient:
         self._log = logging.getLogger("masenko.client")
 
     def is_connected(self) -> bool:
+        """
+        Returns True if the connection this client is connected to the server.
+        """
         return self._sock is not None
 
     def connect(self, host: str, port: int) -> None:
+        """
+        Connect this client to server and maintain the connection.
+        """
         if self._sock:
             raise Exception("already connected")
         self._sock = _LoggedSocket(
@@ -171,6 +198,9 @@ class BareClient:
         self._sock.connect((host, port))
 
     def disconnect(self) -> None:
+        """
+        Disconnect this client from the server.
+        """
         if not self._sock:
             return
         try:
@@ -183,17 +213,29 @@ class BareClient:
                 self._sock = None
 
     def quit(self) -> None:
+        """
+        Send a QUIT command to the server.
+        This should not be necessary as `disconnect` method takes care of the disconnection process
+        already.
+        """
         verb, payload = self._do("QUIT", None)
         if verb != "OK":
             raise UnexpectedResponseError(verb, payload)
 
     def ping(self) -> None:
+        """
+        Send a PING command to the server.
+        """
         verb, payload = self._do("PING", None)
         if verb != "PONG":
             raise UnexpectedResponseError(verb, payload)
 
     @contextmanager
     def atomic(self) -> Iterator[Transaction]:
+        """
+        Returns a transaction context manager. All operations executed on returned transactions are
+        accumulated and executed on the context cleanup.
+        """
         tx = Transaction()
         yield tx
 
@@ -382,6 +424,9 @@ class _LoggedSocket:
 
 @contextmanager
 def connect(host: str, port: int, client_cls=Client):
+    """
+    Returns a context manager that manintains client connection to a Masenko server.
+    """
     c = client_cls()
     c.connect(host, port)
     yield c
