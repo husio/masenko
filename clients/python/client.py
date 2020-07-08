@@ -54,23 +54,10 @@ class Client:
         self._lock = threading.Lock()
         self._client = BareClient()
         self._last_request: int = int(time.time())
+        self._heartbeat: threading.Thread = None
 
     def _update_last_request_time(self) -> None:
         self._last_request = int(time.time())
-
-    def _heartbeat_loop(self, heartbeat_sec: float) -> None:
-        while self._client.is_connected():
-            time.sleep(heartbeat_sec)
-
-            with self._lock:
-                if not self._client.is_connected():
-                    return
-                try:
-                    self._client.ping()
-                except Exception:
-                    self._client.disconnect()
-                    return
-                self._last_request = int(time.time())
 
     def is_connected(self) -> bool:
         return self._client.is_connected()
@@ -79,17 +66,21 @@ class Client:
         with self._lock:
             self._client.connect(host, port)
             # A heartbeat ping activity is maintained in the background.
-            threading.Thread(
-                target=self._heartbeat_loop, args=(self._heartbeat_sec,)
-            ).start()
+            if not self._heartbeat:
+                self._heartbeat = threading.Thread(
+                    target=_heartbeat_loop, args=(self,),
+                )
+                self._heartbeat.start()
 
     def disconnect(self) -> None:
         with self._lock:
             self._client.disconnect()
+            self._heartbeat.join()
 
     def quit(self) -> None:
         with self._lock:
-            return self._client.quit()
+            self._client.quit()
+            self._update_last_request_time()
 
     def ping(self) -> None:
         with self._lock:
@@ -145,6 +136,21 @@ class Client:
             with self._client.atomic() as tx:
                 yield tx
             self._update_last_request_time()
+
+
+def _heartbeat_loop(c: Client) -> None:
+    while True:
+        time.sleep(c._heartbeat_sec)
+
+        with c._lock:
+            if not c._client.is_connected():
+                return
+            try:
+                c._client.ping()
+            except Exception:
+                c._client.disconnect()
+                return
+            c._last_request = int(time.time())
 
 
 class BareClient:
@@ -298,7 +304,7 @@ class BareClient:
             # There is no need to buffer received database between requests, because protocol is
             # synchronous.
             recv = self._sock.recv(4096)
-            while not recv.endswith(b'\n'):
+            while not recv.endswith(b"\n"):
                 recv += self._sock.recv(4096)
                 if len(recv) == 0:
                     raise ConnectionError("received no data")
