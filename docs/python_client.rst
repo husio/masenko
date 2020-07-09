@@ -4,7 +4,8 @@ Python client
 
 .. todo::
 
-   Python client intsallation and usage examples.
+   This is a draft document.
+
 
 
 
@@ -24,15 +25,24 @@ certain scope::
      with connect("localhost", 12345) as masenko:
          masenko.push("register-fruit", {"age": 2, "color": "blue"})
 
-.. autoclass:: BareClient
-   :members:
-   :inherited-members:
+
+.. note::
+
+   In most cases, you want to use :class:`Client` to connect to a Masenko
+   server. :class:`BareClient` does is a thin wrapper over a socket and does
+   not include healthcheck worker.
+
 
 .. autoclass:: Client
    :members:
    :inherited-members:
 
+
 .. autoclass:: Transaction
    :members:
 
+
+.. autoclass:: BareClient
+   :members:
+   :inherited-members:
 

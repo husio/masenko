@@ -9,6 +9,13 @@ from typing import Tuple, Dict, Any, Union, List, Iterator, Optional
 
 
 class Transaction:
+    """
+    Transaction batch together several operations and executes them atomically.
+
+    Only a subset of all client operations can be pefromed in a transaction. No operation returns a
+    result.
+    """
+
     def __init__(self):
         self._operations: List[bytea] = []
 
@@ -50,7 +57,17 @@ class Transaction:
         self._operations.append(f"ACK {raw}\n".encode("utf8"))
 
 
+# typing.ContextManager is not accepted by mypy. Create a nicely looking alias. Sadly this alias is
+# ignored by he documentation.
+ContextManagedTransaction = Iterator[Transaction]
+
+
 class Client:
+    """
+    Client provides the same functionality as :class:`BareClient`. Additionally it maintains a
+    healthcheck thread in order to keep the connection to the Masenko server alive.
+    """
+
     _heartbeat_sec: float = 2
 
     def __init__(self):
@@ -63,10 +80,16 @@ class Client:
         self._last_request = int(time.time())
 
     def is_connected(self) -> bool:
+        """
+        Returns ``True`` if the connection this client is connected to the server.
+        """
         return self._client.is_connected()
 
     def connect(self, host: str, port: int) -> None:
         """
+        Connect this client to server and maintain the connection.
+
+        This method starts a heartbeat thread that ensures that the connection stays alive.
         """
         with self._lock:
             self._client.connect(host, port)
@@ -79,6 +102,7 @@ class Client:
 
     def disconnect(self) -> None:
         """
+        Disconnect this client from the server and cleanup all additional worker threads.
         """
         with self._lock:
             self._client.disconnect()
@@ -86,6 +110,9 @@ class Client:
 
     def quit(self) -> None:
         """
+        Send a *QUIT* command to the server.
+        This should not be necessary as `disconnect` method takes care of the disconnection process
+        already.
         """
         with self._lock:
             self._client.quit()
@@ -93,6 +120,7 @@ class Client:
 
     def ping(self) -> None:
         """
+        Send a *PING* command to the server.
         """
         with self._lock:
             self._client.ping()
@@ -109,6 +137,22 @@ class Client:
         execute_at: datetime.datetime = None,
     ) -> int:
         """
+        Publish a task.
+
+        `payload` must be a JSON serializable data.
+
+        If `queue` is not specified, *default* queue is used.
+
+        If a `retry` is specified, task will be removed from the `queue` after rescheduled `retry`
+        times. Every time a task is failed, it is rescheduled with an exponential backoff.
+
+        If a `deadqueue` attribute is specified, task is moved to that (dead letter) queue after
+        failed at least `retry` times.
+
+        If `execute_at` is provided, task will not be given to any client until specified time. This
+        allows for postponing task execution.
+        Keep in mind that Masenko is not a database and `execute_at` should not be abused to
+        schedule a high volume of tasks.
         """
         with self._lock:
             res = self._client.push(
@@ -129,6 +173,17 @@ class Client:
         timeout: Union[int, str] = None,
     ) -> Any:
         """
+        Pull a single task. This call blocks until a task is retired or timeout
+        deadline is reached.
+        If deadline is reached, :exc:`EmptyError` is raised.
+
+        `queues` must be a list of queue names that should be monitored for a ready to be processed
+        task. Queues are checked in specified order.
+
+        `timeout` is the maximum time this function is allowed to block, waiting for the server to
+        respond. The value can be either a integer representing number of nanoseconds or a string
+        representing the numeric value and the unit (for example ``"2.5s"`` or ``"123ms"``).
+        `timeout` value must not be greater than the heartbeat frequency.
         """
         with self._lock:
             res = self._client.fetch(queues=queues, timeout=timeout)
@@ -150,7 +205,7 @@ class Client:
             self._update_last_request_time()
 
     @contextmanager
-    def atomic(self) -> Iterator[Transaction]:
+    def atomic(self) -> ContextManagedTransaction:
         """
         """
         with self._lock:
@@ -175,13 +230,18 @@ def _heartbeat_loop(c: Client) -> None:
 
 
 class BareClient:
+    """
+    BareClient is low level Masenko client implementation. It provides an implementation for all
+    available commands.
+    """
+
     def __init__(self):
         self._sock: Optional[_LoggedSocket] = None
         self._log = logging.getLogger("masenko.client")
 
     def is_connected(self) -> bool:
         """
-        Returns True if the connection this client is connected to the server.
+        Returns ``True`` if the connection this client is connected to the server.
         """
         return self._sock is not None
 
@@ -214,7 +274,7 @@ class BareClient:
 
     def quit(self) -> None:
         """
-        Send a QUIT command to the server.
+        Send a *QUIT* command to the server.
         This should not be necessary as `disconnect` method takes care of the disconnection process
         already.
         """
@@ -224,14 +284,14 @@ class BareClient:
 
     def ping(self) -> None:
         """
-        Send a PING command to the server.
+        Send a *PING* command to the server.
         """
         verb, payload = self._do("PING", None)
         if verb != "PONG":
             raise UnexpectedResponseError(verb, payload)
 
     @contextmanager
-    def atomic(self) -> Iterator[Transaction]:
+    def atomic(self) -> ContextManagedTransaction:
         """
         Returns a transaction context manager. All operations executed on returned transactions are
         accumulated and executed on the context cleanup.
