@@ -207,6 +207,15 @@ class Client:
     @contextmanager
     def atomic(self) -> ContextManagedTransaction:
         """
+        Returns a transaction context manager. All operations executed on returned transactions are
+        accumulated and executed on the context cleanup.
+
+        All operations are cached and executed on scope exit::
+
+            with masenko_client.atomic() as tx:
+                tx.push("first-task")
+                tx.push("second-task")
+                tx.ack(previously_processed_task_id)
         """
         with self._lock:
             with self._client.atomic() as tx:
@@ -293,8 +302,6 @@ class BareClient:
     @contextmanager
     def atomic(self) -> ContextManagedTransaction:
         """
-        Returns a transaction context manager. All operations executed on returned transactions are
-        accumulated and executed on the context cleanup.
         """
         tx = Transaction()
         yield tx
@@ -313,6 +320,8 @@ class BareClient:
         verb, payload = _parse_response(resp)
         if verb == "OK":
             return
+        if verb == "ERR":
+            raise ResponseError(payload.get("msg", ""), payload)
         raise UnexpectedResponseError(verb, payload)
 
     def push(
@@ -368,6 +377,8 @@ class BareClient:
             return task
         if verb == "EMPTY":
             raise EmptyError()
+        if verb == "ERR":
+            raise ResponseError(payload.get("msg", ""), payload)
         raise UnexpectedResponseError(verb, task)
 
     def ack(self, task_id: int) -> None:
@@ -379,6 +390,8 @@ class BareClient:
         verb, payload = self._do("ACK", {"id": task_id})
         if verb == "OK":
             return
+        if verb == "ERR":
+            raise ResponseError(payload.get("msg", ""), payload)
         raise UnexpectedResponseError(verb, payload)
 
     def nack(self, task_id: int) -> None:
@@ -391,6 +404,8 @@ class BareClient:
         verb, payload = self._do("NACK", {"id": task_id})
         if verb == "OK":
             return
+        if verb == "ERR":
+            raise ResponseError(payload.get("msg", ""), payload)
         raise UnexpectedResponseError(verb, payload)
 
     def _do(self, verb: str, payload: Any = None) -> Tuple[str, Any]:
@@ -437,22 +452,30 @@ def _split_response(raw: bytes) -> Tuple[str, Any]:
 
 
 class Error(Exception):
+    """
+    A generic Masenko client error. All specific errors inherit from this one.
+    """
     pass
 
 
 class EmptyError(Error):
     """
-    EmptyError is raised when no result can be returned.
+    Raised when no result can be returned.
     """
-
     pass
 
 
 class UnexpectedResponseError(Error):
+    """
+    Raised when returned by Masenko server response is not any of the expected verbs.
+    """
     pass
 
 
 class ResponseError(Error):
+    """
+    Raised when the Masenko server response is ``ERR``.
+    """
     def __init__(self, msg, payload):
         super().__init__(msg)
         self.payload = payload
@@ -486,6 +509,13 @@ class _LoggedSocket:
 def connect(host: str, port: int, client_cls=Client):
     """
     Returns a context manager that manintains client connection to a Masenko server.
+
+    Use `connect` when you want to limit the livetime of a client connection to a
+    certain scope::
+
+         with connect("localhost", 12345) as masenko:
+             masenko.push("register-fruit", {"age": 2, "color": "blue"})
+
     """
     c = client_cls()
     c.connect(host, port)
