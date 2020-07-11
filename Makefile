@@ -11,6 +11,9 @@ inlineasset:
 dockerize:
 	docker build -t "masenko:${VERSION}" -t "masenko:latest" .
 
+docs:
+	. .venv/bin/activate; cd docs; $(MAKE) html
+
 help:
 	@echo
 	@echo "Commands"
@@ -18,4 +21,4 @@ help:
 	@echo
 	@sed -n '/^[a-zA-Z0-9_-]*:/s/:.*//p' < Makefile | grep -v -E 'default|help.*' | sort
 
-.PHONY: dockerize help
+.PHONY: dockerize help docs
