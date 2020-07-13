@@ -1,7 +1,8 @@
 Go client
 ---------
 
+Go client documentation is `rendered by the GoDoc <https://godoc.org/github.com/husio/masenko/clients/go>`_.
 
-.. todo::
+.. note::
 
-   Go client intsallation and usage examples.
+   GoDoc is rendering ``master`` branch which is rarely updated before Masenko reaches stable state.

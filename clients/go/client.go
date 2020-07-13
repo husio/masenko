@@ -13,26 +13,39 @@ import (
 	"time"
 )
 
-type Client struct {
+// Client is the base interface implemented by all Masenko clients.
+type Client interface {
+	// Push schedules a task execution. Payload must be a (usually JSON) serializable.
+	Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error
+	// Fetch blocks until a task can be returned or timeout is reached. If
+	// timed out without being able to return a task, ErrEmpty is returned.
+	Fetch(ctx context.Context, queues []string, timeout time.Duration) (*FetchResponse, error)
+	// Close the client. Release all resources allocated.
+	Close() error
+}
+
+type bareClient struct {
 	cl io.Closer
 	mu sync.Mutex
 	rd *bufio.Reader
 	wr *bufio.Writer
 }
 
-func Dial(address string) (*Client, error) {
+var _ Client = (*bareClient)(nil)
+
+func Dial(address string) (*bareClient, error) {
 	c, err := net.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("TCP dial: %w", err)
 	}
-	return &Client{
+	return &bareClient{
 		cl: c,
 		rd: bufio.NewReader(c),
 		wr: bufio.NewWriter(c),
 	}, nil
 }
 
-func (c *Client) Ping(ctx context.Context) error {
+func (c *bareClient) Ping(ctx context.Context) error {
 	resp, err := c.do(ctx, "PING", emptyBody, nil)
 	if err != nil {
 		return err
@@ -43,7 +56,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) Push(
+func (c *bareClient) Push(
 	ctx context.Context,
 	taskName string,
 	queueName string,
@@ -76,7 +89,7 @@ type pushRequest struct {
 	ExecuteAt *time.Time      `json:"execute_at,omitempty"`
 }
 
-func (c *Client) Fetch(
+func (c *bareClient) Fetch(
 	ctx context.Context,
 	queues []string,
 	timeout time.Duration,
@@ -102,11 +115,11 @@ type FetchResponse struct {
 	Failures uint8           `json:"failures,omitempty"`
 }
 
-func (c *Client) Close() error {
+func (c *bareClient) Close() error {
 	return c.cl.Close()
 }
 
-func (c *Client) do(
+func (c *bareClient) do(
 	ctx context.Context,
 	verb string,
 	payload interface{},

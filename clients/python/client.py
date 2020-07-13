@@ -372,14 +372,14 @@ class BareClient:
         if timeout is not None:
             request["timeout"] = timeout
 
-        verb, task = self._do("FETCH", request)
+        verb, payload = self._do("FETCH", request)
         if verb == "OK":
-            return task
+            return payload
         if verb == "EMPTY":
             raise EmptyError()
         if verb == "ERR":
             raise ResponseError(payload.get("msg", ""), payload)
-        raise UnexpectedResponseError(verb, task)
+        raise UnexpectedResponseError(verb, payload)
 
     def ack(self, task_id: int) -> None:
         """
