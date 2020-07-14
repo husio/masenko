@@ -1,0 +1,50 @@
+name: Test
+on:
+  push:
+    branches: [unstable, master]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+jobs:
+  build:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.14
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Setup env
+      run: |
+        echo "::set-env name=GOPATH::$(dirname $GITHUB_WORKSPACE)"
+        echo "::add-path::$(dirname $GITHUB_WORKSPACE)/bin"
+      shell: bash
+
+    - name: Run go vet
+      run: go vet -c=1 ./...
+      timeout-minutes: 1
+
+    - name: Run tests
+      run: go test -v -race ./...
+      timeout-minutes: 2
+
+    - name: Run benchmarks
+      run: |
+          go test ./... -benchmem -bench=. -run=xXnoneXx | \
+          tee /dev/tty | \
+          curl https://benchsrv.herokuapp.com/upload/ -F commit=$GITHUB_SHA -F content=@- -H "signature: $BENCHSRV_SECRET"
+      timeout-minutes: 10
+
+    - name: Run Python client tests
+      run: |
+        make build-masenko ; \
+        cd clients/python/ ; \
+        python3 -m unittest ;
+      timeout-minutes: 2
