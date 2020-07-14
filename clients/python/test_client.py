@@ -106,7 +106,7 @@ class SimpleTest(unittest.TestCase):
             with self.assertRaises(client.EmptyError):
                 c.fetch(queues=[queue], timeout="1ms")
 
-    @mock.patch.object(client.BareClient, "ping")
+    @mock.patch.object(client._BareClient, "ping")
     def test_ping_is_sent_in_the_background(self, ping):
         c = client.Client()
         c._heartbeat_sec = 0.1

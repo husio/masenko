@@ -73,11 +73,13 @@ class Client:
     def __init__(self):
         self._lock = threading.Lock()
         self._client = _BareClient()
-        self._last_request: int = int(time.time())
-        self._heartbeat: threading.Thread = None
+        self._heartbeat: Optional[threading.Thread] = None
 
     def _update_last_request_time(self) -> None:
-        self._last_request = int(time.time())
+        # This is a placeholder for heartbeat optimization. Client must send any request every now
+        # and then so if we track when the last request was made, some PING requests can be skipped.
+        # To simplify implementation, we do not rely on this just yet.
+        pass
 
     def is_connected(self) -> bool:
         """
@@ -106,7 +108,15 @@ class Client:
         """
         with self._lock:
             self._client.disconnect()
+        if self._heartbeat:
             self._heartbeat.join()
+            self._heartbeat = None
+
+    def ping(self) -> None:
+        """
+        Send a *PING* command to the server.
+        """
+        self._client.ping()
 
     def push(
         self,
@@ -217,7 +227,6 @@ def _heartbeat_loop(c: Client) -> None:
             except Exception:
                 c._client.disconnect()
                 return
-            c._last_request = int(time.time())
 
 
 class _BareClient:
