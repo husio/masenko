@@ -10,14 +10,11 @@ import (
 	"github.com/husio/masenko/masenko"
 )
 
-func TestConnectAndPing(t *testing.T) {
+func TestConnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	c := RunServerAndClient(ctx, t)
-	if err := c.Ping(ctx); err != nil {
-		t.Fatalf("ping: %s", err)
-	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("close: %s", err)
 	}
@@ -40,7 +37,7 @@ func TestPushAndFetch(t *testing.T) {
 	}
 }
 
-func RunServerAndClient(ctx context.Context, t testing.TB) *masenkoclient.Client {
+func RunServerAndClient(ctx context.Context, t testing.TB) masenkoclient.Client {
 	t.Helper()
 
 	serverAddr := RunServer(ctx, t)
