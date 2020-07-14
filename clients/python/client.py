@@ -64,15 +64,15 @@ ContextManagedTransaction = Iterator[Transaction]
 
 class Client:
     """
-    Client provides the same functionality as :class:`BareClient`. Additionally it maintains a
-    healthcheck thread in order to keep the connection to the Masenko server alive.
+    :class:`Client` implements Masenko API and maintains the health of the connection with the
+    Masenko server.
     """
 
     _heartbeat_sec: float = 2
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._client = BareClient()
+        self._client = _BareClient()
         self._last_request: int = int(time.time())
         self._heartbeat: threading.Thread = None
 
@@ -107,24 +107,6 @@ class Client:
         with self._lock:
             self._client.disconnect()
             self._heartbeat.join()
-
-    def quit(self) -> None:
-        """
-        Send a *QUIT* command to the server.
-        This should not be necessary as `disconnect` method takes care of the disconnection process
-        already.
-        """
-        with self._lock:
-            self._client.quit()
-            self._update_last_request_time()
-
-    def ping(self) -> None:
-        """
-        Send a *PING* command to the server.
-        """
-        with self._lock:
-            self._client.ping()
-            self._update_last_request_time()
 
     def push(
         self,
@@ -238,12 +220,7 @@ def _heartbeat_loop(c: Client) -> None:
             c._last_request = int(time.time())
 
 
-class BareClient:
-    """
-    BareClient is low level Masenko client implementation. It provides an implementation for all
-    available commands.
-    """
-
+class _BareClient:
     def __init__(self):
         self._sock: Optional[_LoggedSocket] = None
         self._log = logging.getLogger("masenko.client")
@@ -302,6 +279,7 @@ class BareClient:
     @contextmanager
     def atomic(self) -> ContextManagedTransaction:
         """
+        Begin a transaction.
         """
         tx = Transaction()
         yield tx
@@ -519,5 +497,7 @@ def connect(host: str, port: int, client_cls=Client):
     """
     c = client_cls()
     c.connect(host, port)
-    yield c
-    c.disconnect()
+    try:
+        yield c
+    finally:
+        c.disconnect()
