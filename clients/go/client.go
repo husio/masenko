@@ -31,9 +31,7 @@ type bareClient struct {
 	wr *bufio.Writer
 }
 
-var _ Client = (*bareClient)(nil)
-
-func Dial(address string) (*bareClient, error) {
+func Dial(address string) (Client, error) {
 	c, err := net.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("TCP dial: %w", err)
@@ -52,6 +50,17 @@ func (c *bareClient) Ping(ctx context.Context) error {
 	}
 	if resp != "PONG" {
 		return fmt.Errorf("unexpected response: %s", resp)
+	}
+	return nil
+}
+
+func (c *bareClient) Quit(ctx context.Context) error {
+	resp, err := c.do(ctx, "QUIT", emptyBody, nil)
+	if err != nil {
+		return err
+	}
+	if resp != "OK" {
+		return fmt.Errorf("%s: %s", ErrUnexpectedResponse, resp)
 	}
 	return nil
 }
@@ -116,7 +125,9 @@ type FetchResponse struct {
 }
 
 func (c *bareClient) Close() error {
-	return c.cl.Close()
+	err := c.Quit(context.Background())
+	c.cl.Close()
+	return err
 }
 
 func (c *bareClient) do(
@@ -168,6 +179,18 @@ func (c *bareClient) do(
 	return code, nil
 }
 
-var ErrEmpty = errors.New("empty")
+var (
+	// ErrClient is a main Masenko client error, that all other errors
+	// extend.
+	ErrClient = errors.New("masenko client")
+
+	// ErrEmpty is returned when a task fetch timed out without being able
+	// to return a task from any of the queues.
+	ErrEmpty = fmt.Errorf("%w: empty", ErrClient)
+
+	// ErrUnexpectedResponse is returned when an unexpected response for
+	// made request is received.
+	ErrUnexpectedResponse = fmt.Errorf("%w: unexpected response", ErrClient)
+)
 
 var emptyBody = json.RawMessage("{}")
