@@ -45,8 +45,10 @@ func RunServerAndClient(ctx context.Context, t testing.TB) masenkoclient.Client 
 	if err != nil {
 		t.Fatalf("cannot connect: %s", err)
 	}
-	if err := c.Ping(ctx); err != nil {
-		t.Fatalf("cannot ping: %s", err)
+	if cc, ok := c.(interface{ Ping(context.Context) error }); ok {
+		if err := cc.Ping(ctx); err != nil {
+			t.Fatalf("cannot ping: %s", err)
+		}
 	}
 	t.Cleanup(func() { c.Close() })
 	return c

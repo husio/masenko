@@ -24,23 +24,81 @@ type Client interface {
 	Close() error
 }
 
-type bareClient struct {
-	cl io.Closer
-	mu sync.Mutex
-	rd *bufio.Reader
-	wr *bufio.Writer
-}
-
 func Dial(address string) (Client, error) {
 	c, err := net.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("TCP dial: %w", err)
 	}
-	return &bareClient{
-		cl: c,
-		rd: bufio.NewReader(c),
-		wr: bufio.NewWriter(c),
-	}, nil
+	hb := &hbClient{
+		bc: bareClient{
+			cl: c,
+			rd: bufio.NewReader(c),
+			wr: bufio.NewWriter(c),
+		},
+		stop: make(chan struct{}),
+	}
+	go hb.heartbeatLoop()
+
+	return hb, nil
+}
+
+type hbClient struct {
+	bc   bareClient
+	stop chan struct{}
+}
+
+func (hb *hbClient) heartbeatLoop() {
+	t := time.NewTicker(2 * time.Second)
+	for {
+		select {
+		case <-hb.stop:
+			return
+		case <-t.C:
+			if err := hb.bc.Ping(context.Background()); err != nil {
+				hb.Close()
+			}
+		}
+	}
+}
+
+func (hb *hbClient) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
+	if hb.stop == nil {
+		return ErrClosed
+	}
+	return hb.bc.Push(ctx, taskName, queueName, payload, deadqueue, retry, executeAt)
+}
+
+func (hb *hbClient) Fetch(ctx context.Context, queues []string, timeout time.Duration) (*FetchResponse, error) {
+	if hb.stop == nil {
+		return nil, ErrClosed
+	}
+	return hb.bc.Fetch(ctx, queues, timeout)
+}
+
+func (hb *hbClient) Close() error {
+	if hb.stop == nil {
+		return ErrClosed
+	}
+
+	err := hb.bc.Close()
+
+	// Subsequent closing must not panic.
+	defer func() {
+		if e := recover(); e != nil && err == nil {
+			err = ErrClosed
+		}
+	}()
+	close(hb.stop)
+	hb.stop = nil
+
+	return err
+}
+
+type bareClient struct {
+	cl io.Closer
+	mu sync.Mutex
+	rd *bufio.Reader
+	wr *bufio.Writer
 }
 
 func (c *bareClient) Ping(ctx context.Context) error {
@@ -191,6 +249,9 @@ var (
 	// ErrUnexpectedResponse is returned when an unexpected response for
 	// made request is received.
 	ErrUnexpectedResponse = fmt.Errorf("%w: unexpected response", ErrClient)
+
+	// ErrClosed is returned when a closed client is used.
+	ErrClosed = fmt.Errorf("%w: closed", ErrClient)
 )
 
 var emptyBody = json.RawMessage("{}")
