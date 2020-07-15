@@ -15,7 +15,7 @@ docs:
 	. .venv/bin/activate; cd docs; $(MAKE) html
 
 test-go:
-	go test github.com/husio/masenko/...
+	go test -race github.com/husio/masenko/...
 
 test-python: build-masenko
 	. .venv/bin/activate; cd clients/python; python -m unittest

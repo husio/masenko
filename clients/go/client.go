@@ -62,22 +62,28 @@ func (hb *hbClient) heartbeatLoop() {
 }
 
 func (hb *hbClient) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
-	if hb.stop == nil {
+	select {
+	case <-hb.stop:
 		return ErrClosed
+	default:
+		return hb.bc.Push(ctx, taskName, queueName, payload, deadqueue, retry, executeAt)
 	}
-	return hb.bc.Push(ctx, taskName, queueName, payload, deadqueue, retry, executeAt)
 }
 
 func (hb *hbClient) Fetch(ctx context.Context, queues []string, timeout time.Duration) (*FetchResponse, error) {
-	if hb.stop == nil {
+	select {
+	case <-hb.stop:
 		return nil, ErrClosed
+	default:
+		return hb.bc.Fetch(ctx, queues, timeout)
 	}
-	return hb.bc.Fetch(ctx, queues, timeout)
 }
 
 func (hb *hbClient) Close() error {
-	if hb.stop == nil {
+	select {
+	case <-hb.stop:
 		return ErrClosed
+	default:
 	}
 
 	err := hb.bc.Close()
@@ -89,7 +95,6 @@ func (hb *hbClient) Close() error {
 		}
 	}()
 	close(hb.stop)
-	hb.stop = nil
 
 	return err
 }
