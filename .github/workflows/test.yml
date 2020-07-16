@@ -27,11 +27,11 @@ jobs:
         echo "::add-path::$(dirname $GITHUB_WORKSPACE)/bin"
       shell: bash
 
-    - name: Run go vet
+    - name: Run Go vet
       run: go vet -c=1 ./...
       timeout-minutes: 1
 
-    - name: Run tests
+    - name: Run Go tests
       run: go test -v -race ./...
       timeout-minutes: 2
 
