@@ -15,11 +15,21 @@ import (
 
 // Client is the base interface implemented by all Masenko clients.
 type Client interface {
-	// Push schedules a task execution. Payload must be a (usually JSON) serializable.
+	// Push schedules a task execution. Payload must be a (usually JSON)
+	// serializable.
 	Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error
-	// Fetch blocks until a task can be returned or timeout is reached. If
-	// timed out without being able to return a task, ErrEmpty is returned.
-	Fetch(ctx context.Context, queues []string, timeout time.Duration) (*FetchResponse, error)
+	// Fetch blocks until a task can be returned or context timeout is
+	// reached. If timed out without being able to return a task, ErrEmpty
+	// is returned (even if caused by context timeout).
+	Fetch(ctx context.Context, queues []string) (*FetchResponse, error)
+	// Ack marks the task as processed. This operation removes the task
+	// from the server.
+	Ack(ctx context.Context, taskID uint32) error
+	// Nack marks the task processing as failed. This operation reschedules
+	// the task accodring to the retry policy. Depending on the retry
+	// configuration and failures count, this task might be rescheduled for
+	// future processing or moved to a dead letter queue.
+	Nack(ctx context.Context, taskID uint32) error
 	// Close the client. Release all resources allocated.
 	Close() error
 }
@@ -61,6 +71,24 @@ func (hb *hbClient) heartbeatLoop() {
 	}
 }
 
+func (hb *hbClient) Ack(ctx context.Context, taskID uint32) error {
+	select {
+	case <-hb.stop:
+		return ErrClosed
+	default:
+		return hb.bc.Ack(ctx, taskID)
+	}
+}
+
+func (hb *hbClient) Nack(ctx context.Context, taskID uint32) error {
+	select {
+	case <-hb.stop:
+		return ErrClosed
+	default:
+		return hb.bc.Nack(ctx, taskID)
+	}
+}
+
 func (hb *hbClient) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
 	select {
 	case <-hb.stop:
@@ -70,12 +98,12 @@ func (hb *hbClient) Push(ctx context.Context, taskName string, queueName string,
 	}
 }
 
-func (hb *hbClient) Fetch(ctx context.Context, queues []string, timeout time.Duration) (*FetchResponse, error) {
+func (hb *hbClient) Fetch(ctx context.Context, queues []string) (*FetchResponse, error) {
 	select {
 	case <-hb.stop:
 		return nil, ErrClosed
 	default:
-		return hb.bc.Fetch(ctx, queues, timeout)
+		return hb.bc.Fetch(ctx, queues)
 	}
 }
 
@@ -112,9 +140,39 @@ func (c *bareClient) Ping(ctx context.Context) error {
 		return err
 	}
 	if resp != "PONG" {
-		return fmt.Errorf("unexpected response: %s", resp)
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp)
 	}
 	return nil
+}
+
+func (c *bareClient) Ack(ctx context.Context, taskID uint32) error {
+	resp, err := c.do(ctx, "ACK", ackRequest{TaskID: taskID}, nil)
+	if err != nil {
+		return err
+	}
+	if resp != "OK" {
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp)
+	}
+	return nil
+}
+
+type ackRequest struct {
+	TaskID uint32 `json:"id"`
+}
+
+func (c *bareClient) Nack(ctx context.Context, taskID uint32) error {
+	resp, err := c.do(ctx, "NACK", nackRequest{TaskID: taskID}, nil)
+	if err != nil {
+		return err
+	}
+	if resp != "OK" {
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp)
+	}
+	return nil
+}
+
+type nackRequest struct {
+	TaskID uint32 `json:"id"`
 }
 
 func (c *bareClient) Quit(ctx context.Context) error {
@@ -161,22 +219,23 @@ type pushRequest struct {
 	ExecuteAt *time.Time      `json:"execute_at,omitempty"`
 }
 
-func (c *bareClient) Fetch(
-	ctx context.Context,
-	queues []string,
-	timeout time.Duration,
-) (*FetchResponse, error) {
+func (c *bareClient) Fetch(ctx context.Context, queues []string) (*FetchResponse, error) {
+	var timeout string
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = deadline.Sub(time.Now()).String()
+	}
+
 	var resp FetchResponse
 	_, err := c.do(ctx, "FETCH", fetchRequest{
 		Queues:  queues,
-		Timeout: timeout.String(),
+		Timeout: timeout,
 	}, &resp)
 	return &resp, err
 }
 
 type fetchRequest struct {
 	Queues  []string `json:"queues"`
-	Timeout string   `json:"timeout"`
+	Timeout string   `json:"timeout,omitempty"`
 }
 
 type FetchResponse struct {
@@ -234,6 +293,9 @@ func (c *bareClient) do(
 		}
 		return code, errors.New(info.Msg)
 	}
+	if code == "EMPTY" {
+		return code, ErrEmpty
+	}
 	if response != nil {
 		if err := json.Unmarshal(chunks[1], response); err != nil {
 			return code, fmt.Errorf("unmarshal response: %w", err)
@@ -249,7 +311,7 @@ var (
 
 	// ErrEmpty is returned when a task fetch timed out without being able
 	// to return a task from any of the queues.
-	ErrEmpty = fmt.Errorf("%w: empty", ErrClient)
+	ErrEmpty = fmt.Errorf("%w: empty queue", ErrClient)
 
 	// ErrUnexpectedResponse is returned when an unexpected response for
 	// made request is received.
