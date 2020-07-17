@@ -1,3 +1,9 @@
+/*
+
+Package masenkoclient provides an implementation of a client that allows to
+comunicate with a single Masenko server.
+
+*/
 package masenkoclient
 
 import (
@@ -34,12 +40,16 @@ type Client interface {
 	Close() error
 }
 
-func Dial(address string) (Client, error) {
+// Dial returns a Client connected to a Masenko server reachable under provided
+// address.
+// Returned client maintains the connection health by periodically sending a
+// heartbeat request.
+func Dial(address string) (*HeartbeatClient, error) {
 	c, err := net.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("TCP dial: %w", err)
 	}
-	hb := &hbClient{
+	hb := &HeartbeatClient{
 		bc: bareClient{
 			cl: c,
 			rd: bufio.NewReader(c),
@@ -52,12 +62,23 @@ func Dial(address string) (Client, error) {
 	return hb, nil
 }
 
-type hbClient struct {
+// HeartbeatClient is a Masenko client implementation. It provides all core
+// functionality necessary to publish and consume tasks. Addionally, this
+// client implementation maintains connection health by sending a heartbeat
+// request if needed.
+type HeartbeatClient struct {
 	bc   bareClient
 	stop chan struct{}
 }
 
-func (hb *hbClient) heartbeatLoop() {
+var _ Client = (*HeartbeatClient)(nil)
+
+func (hb *HeartbeatClient) heartbeatLoop() {
+	// In the current implementation, heartbeat PING is sent periodically
+	// regardless the traffic. This could be optimized to send it only if
+	// no other request was executed.
+	// Sending at a regular pace is much easier to implement. Penalty is
+	// very low.
 	t := time.NewTicker(2 * time.Second)
 	for {
 		select {
@@ -71,7 +92,7 @@ func (hb *hbClient) heartbeatLoop() {
 	}
 }
 
-func (hb *hbClient) Ack(ctx context.Context, taskID uint32) error {
+func (hb *HeartbeatClient) Ack(ctx context.Context, taskID uint32) error {
 	select {
 	case <-hb.stop:
 		return ErrClosed
@@ -80,7 +101,7 @@ func (hb *hbClient) Ack(ctx context.Context, taskID uint32) error {
 	}
 }
 
-func (hb *hbClient) Nack(ctx context.Context, taskID uint32) error {
+func (hb *HeartbeatClient) Nack(ctx context.Context, taskID uint32) error {
 	select {
 	case <-hb.stop:
 		return ErrClosed
@@ -89,7 +110,7 @@ func (hb *hbClient) Nack(ctx context.Context, taskID uint32) error {
 	}
 }
 
-func (hb *hbClient) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
+func (hb *HeartbeatClient) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
 	select {
 	case <-hb.stop:
 		return ErrClosed
@@ -98,7 +119,7 @@ func (hb *hbClient) Push(ctx context.Context, taskName string, queueName string,
 	}
 }
 
-func (hb *hbClient) Fetch(ctx context.Context, queues []string) (*FetchResponse, error) {
+func (hb *HeartbeatClient) Fetch(ctx context.Context, queues []string) (*FetchResponse, error) {
 	select {
 	case <-hb.stop:
 		return nil, ErrClosed
@@ -107,7 +128,7 @@ func (hb *hbClient) Fetch(ctx context.Context, queues []string) (*FetchResponse,
 	}
 }
 
-func (hb *hbClient) Close() error {
+func (hb *HeartbeatClient) Close() error {
 	select {
 	case <-hb.stop:
 		return ErrClosed
@@ -238,12 +259,18 @@ type fetchRequest struct {
 	Timeout string   `json:"timeout,omitempty"`
 }
 
+// FetchRespones represents a single task returned by the FETCH response.
 type FetchResponse struct {
-	ID       uint32          `json:"id"`
-	Queue    string          `json:"queue"`
-	Name     string          `json:"name"`
-	Payload  json.RawMessage `json:"payload,omitempty"`
-	Failures uint8           `json:"failures,omitempty"`
+	// ID is the identifier of the task.
+	ID uint32 `json:"id"`
+	// Queue is the name of the queue to which the task belongs to.
+	Queue string `json:"queue"`
+	// Name is the task name.
+	Name string `json:"name"`
+	// Payload is an optional JSON serialized payload of the task.
+	Payload json.RawMessage `json:"payload,omitempty"`
+	// Failures is the number of failed processing attempts of this task.
+	Failures uint8 `json:"failures,omitempty"`
 }
 
 func (c *bareClient) Close() error {
