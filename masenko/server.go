@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/husio/masenko/masenko/webui"
 	"github.com/husio/masenko/proto"
 	"github.com/husio/masenko/store"
-	"github.com/husio/masenko/masenko/webui"
 )
 
 type ServerConfiguration struct {

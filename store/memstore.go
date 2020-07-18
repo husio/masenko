@@ -44,7 +44,16 @@ type MemStore struct {
 // directory. If WAL files are found, the oldest (decided by file name) of the
 // WAL files is used to populate the state.
 func OpenMemStore(walDir string, vacuumSize uint64, logger *log.Logger) (*MemStore, error) {
-	fd, err := openLatestWALFile(walDir)
+	// The current implementation does not sync the data after write. This
+	// is safe if the Masenko process crash, because Masenko does not
+	// buffer writes and system should make sure file buffer is flushed
+	// fairly often.
+	// If asynchronous (kernel) writes are not safe enough, using O_SYNC or
+	// O_DSYNC modes here would ensure all writes are blocking until hard
+	// drive write. This would also lower the WAL write performance.
+	const walMode = 0 // O_SYNC or O_DSYNC
+
+	fd, err := openLatestWALFile(walDir, walMode)
 	if err != nil {
 		return nil, fmt.Errorf("open WAL file: %w", err)
 	}
@@ -166,7 +175,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 
 // openLatestWALFile search in given directory for WAL files and returns the
 // oldest of them.
-func openLatestWALFile(walDir string) (*os.File, error) {
+func openLatestWALFile(walDir string, mode int) (*os.File, error) {
 	infos, err := ioutil.ReadDir(walDir)
 	if err != nil {
 		return nil, fmt.Errorf("read WAL dir: %w", err)
@@ -194,7 +203,7 @@ func openLatestWALFile(walDir string) (*os.File, error) {
 		return nil, fmt.Errorf("created a non WAL file name: %s", latestWal)
 	}
 
-	fd, err := os.OpenFile(path.Join(walDir, latestWal), os.O_RDWR|os.O_CREATE, 0644)
+	fd, err := os.OpenFile(path.Join(walDir, latestWal), os.O_RDWR|os.O_CREATE|mode, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open wal: %w", err)
 	}
