@@ -20,6 +20,10 @@ test-go:
 test-python: build-masenko
 	. .venv/bin/activate; cd clients/python; python -m unittest
 
+run-dev: inlineasset
+	@# https://github.com/cespare/reflex
+	reflex -G '.*' -G 'masenko/webui/asset_*' -s -- sh -c 'go generate ./... && go run github.com/husio/masenko/cmd/masenko'
+
 help:
 	@echo
 	@echo "Commands"

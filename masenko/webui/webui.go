@@ -26,7 +26,6 @@ func NewWebUI(queue store.Queue, metrics Stater) *WebUI {
 }
 
 //go:generate inlineasset webui WebUIHTML ./webui.html ./asset_webui.html.go
-//go:generate inlineasset webui WebUISmoothieJS ./smoothie.js ./asset_smoothie.js.go
 
 func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
@@ -34,8 +33,6 @@ func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "index.html", startTime, bytes.NewReader(WebUIHTML))
 	case "/stats.json":
 		ui.handleCurrentStats(w, r)
-	case "/smoothie.js":
-		http.ServeContent(w, r, "smoothie.js", startTime, bytes.NewReader(WebUISmoothieJS))
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}

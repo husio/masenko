@@ -3,105 +3,111 @@
 <head>
   <title>Task Queue</title>
 <style>
-body { font-size: 180%; width: 100%; margin: 40px 0; padding:0;}
-canvas { margin: 10px 0; }
-div.smoothie-chart-tooltip {
-  background: #444;
-  padding: 1em;
-  margin-top: 20px;
-  font-family: consolas;
-  color: white;
-  font-size: 10px;
-  pointer-events: none;
-}
-.legend-box { width: 20px; height: 20px; margin-right: 10px; display: inline-block; }
+html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
+#graphs { display: flex; justify-content: space-around; align-items: center; height: 60%; width: 100%; flex-direction: row;}
+#graphs .graph { position: relative; width: 200px; height: 80px; }
+#graphs .graph .subgraph { width: 100%; height: 100%; border: 1px solid #333; display: flex; margin: 10px; position: absolute; bottom: 0; left: 0; }
+#graphs .graph .subgraph .bar { opacity: 0.5; width: 100%; margin: 0; padding: 0; display: inline-block; align-self: flex-end; }
 </style>
-<script type="text/javascript" src="/smoothie.js"></script>
 </head>
 <body>
-  <div>
-    <code id="info"></code>
-  </div>
-  <canvas id="stats" width="800px" height="400px"></canvas>
-  <div id="legend"></div>
+  <div id="graphs"></div>
+  <code id="info"></code>
 </body>
 <script>
-
-var lines = {}
-
-var counters =  [
-  {name: "ready", color: "#c10000", width: 3},
-  {name: "delayed", color: "#CE6003", width: 3},
-  {name: "to_ack", color: "#4B54E7", width: 3},
-]
-
-function render(smoothie, data) {
-  info.innerHTML = JSON.stringify(data)
-
-  for (var i = 0; i< data.queues.length; i++) {
-    var q = data.queues[i]
-    for (var j in counters) {
-      var counter = counters[j]
-      var line = lines[q.name + ":" + counter.name]
-      if (!line) {
-        line = new TimeSeries()
-        smoothie.addTimeSeries(line, {
-          strokeStyle: counter.color,
-          lineWidth: counter.width,
-        })
-        lines[q.name + ":" + counter.name] = line
-      }
-      line.append(new Date().getTime(), q[counter.name])
-      console.log(q.name, counter, q[counter])
-    }
-  }
-}
-
-function stats(cb) {
-  var req = new XMLHttpRequest();
-  req.open('GET', '/stats.json', true);
-  req.onload = function() {
-    if (this.status === 200) {
-      cb(JSON.parse(this.response))
-    }
-  }
-  req.send()
-}
-
-var info
-
-function renderLegend(dest) {
-  var chunks = []
-  for (var i in counters) {
-    var c = counters[i]
-    chunks.push('<div><span class="legend-box" style="background:' + c.color + '"></span>' + c.name + '</div>')
-  }
-  dest.innerHTML = chunks.join('\n')
-}
-
 window.addEventListener("load", function() {
-  var smoothie = new SmoothieChart({
-      millisPerPixel: 50,
-      tooltip: true,
-      grid: {
-        labels: {disabled: true},
-        borderVisible: false,
-        strokeStyle:'#ececec',
-        verticalSections: 0,
-        fillStyle:'#fff',
-        lineWidth: 2,
-      },
-      labels: { fillStyle:'#383838' }
-  })
-  smoothie.streamTo(document.getElementById("stats"));
+  var g = document.getElementById("graphs")
 
-  info = document.getElementById("info")
+  var queueMetrics = [
+    {name: "ready", color: "#A8DCEC"},
+    {name: "delayed", color: "#E2ECA8"},
+    {name: "to_ack", color: "#ECA8E0"}
+  ]
+  var queues = []
 
-  setInterval(function() {
-    stats(function(data) { render(smoothie, data) })
-  }, 500)
+  function observeQueue(state) {
+    var queue = getOrCreateQueue(g, state.name)
 
-  renderLegend(document.getElementById('legend'))
+    queueMetrics.forEach(function(qmetric) {
+      var value = state[qmetric.name]
+
+      if (value > queue.maxval) {
+        queue.maxval = value * 2
+        queueMetrics.forEach(function(m) {
+          queue.metrics[m.name].bars.forEach(function(b) {
+            var h = b.getAttribute("value") / queue.maxval
+            b.title = h
+            b.style.height = h + "%"
+          })
+        })
+      }
+      addBar(queue.metrics[qmetric.name], (value / queue.maxval) * 100, value)
+    })
+  }
+
+  function getOrCreateQueue(parent, name) {
+    for (var i=0; i<queues.length; i++) {
+      if (queues[i].name === name) {
+        return queues[i]
+      }
+    }
+
+    var node = document.createElement("div")
+    node.classList.add("graph")
+    parent.appendChild(node)
+
+    var q = {name: name, metrics: {}, node: node, maxval: 10}
+
+    queueMetrics.forEach(function(metric) {
+      var n = document.createElement("div")
+      n.classList.add("subgraph")
+      node.appendChild(n)
+      q.metrics[metric.name] = {node: n, bars: [], color: metric.color}
+    })
+
+    queues.push(q)
+    return q
+  }
+
+  function stats(cb) {
+    var req = new XMLHttpRequest();
+    req.open('GET', '/stats.json', true);
+    req.onload = function() {
+      if (this.status === 200) {
+        cb(JSON.parse(this.response))
+      }
+    }
+    req.send()
+  }
+
+  function addBar(graph, height, value) {
+    var b = document.createElement("span")
+    b.classList.add("bar")
+    b.style.height = height + "%"
+    b.style["border-top"] = "2px solid " + graph.color
+    b.title = height
+    b.setAttribute("value", value)
+    graph.node.appendChild(b)
+    graph.bars.push(b)
+
+    if (graph.bars.length > 60) {
+      graph.node.removeChild(graph.bars.shift())
+    }
+  }
+
+  var info = document.getElementById("info")
+
+  function pullStats() {
+    stats(function(data) {
+
+      info.innerHTML = JSON.stringify(data)
+
+      data.queues.forEach(observeQueue)
+      setTimeout(pullStats, 500)
+    })
+  }
+
+  pullStats()
 })
 
 </script>
