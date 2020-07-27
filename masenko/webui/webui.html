@@ -4,69 +4,65 @@
   <title>Task Queue</title>
 <style>
 html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
-#graphs { display: flex; justify-content: space-around; align-items: center; height: 60%; width: 100%; flex-direction: row;}
-#graphs .graph { position: relative; width: 200px; height: 80px; }
-#graphs .graph .subgraph { width: 100%; height: 100%; border: 1px solid #333; display: flex; margin: 10px; position: absolute; bottom: 0; left: 0; }
-#graphs .graph .subgraph .bar { opacity: 0.5; width: 100%; margin: 0; padding: 0; display: inline-block; align-self: flex-end; }
+#queues { display: flex; justify-content: space-around; align-items: center; height: 60%; width: 100%; flex-direction: row;}
+#queues .info {}
+#queues .graph { display: flex; width: 200px; height: 80px;}
+#queues .graph .bar { width: 100%; margin: 0; padding: 0; display: inline-block; align-self: flex-end; }
 </style>
 </head>
 <body>
-  <div id="graphs"></div>
+  <div id="queues"></div>
   <code id="info"></code>
 </body>
 <script>
 window.addEventListener("load", function() {
-  var g = document.getElementById("graphs")
+  var queues = document.getElementById("queues")
 
-  var queueMetrics = [
-    {name: "ready", color: "#A8DCEC"},
-    {name: "delayed", color: "#E2ECA8"},
-    {name: "to_ack", color: "#ECA8E0"}
-  ]
-  var queues = []
 
-  function observeQueue(state) {
-    var queue = getOrCreateQueue(g, state.name)
+  function Graph(node, name, color) {
+    var n = document.createElement("div")
+    n.classList.add("graph")
+    node.appendChild(n)
 
-    queueMetrics.forEach(function(qmetric) {
-      var value = state[qmetric.name]
+    this.label = document.createElement("span")
+    this.label.innerHTML = name + " 0"
+    node.appendChild(this.label)
 
-      if (value > queue.maxval) {
-        queue.maxval = value * 2
-        queueMetrics.forEach(function(m) {
-          queue.metrics[m.name].bars.forEach(function(b) {
-            var h = b.getAttribute("value") / queue.maxval
-            b.title = h
-            b.style.height = h + "%"
-          })
-        })
-      }
-      addBar(queue.metrics[qmetric.name], (value / queue.maxval) * 100, value)
-    })
+    this.node = n
+    this.name = name
+    this.color = color
+    this.maxval = 0
+    this.maxitems = 60
+    this.bars = []
   }
 
-  function getOrCreateQueue(parent, name) {
-    for (var i=0; i<queues.length; i++) {
-      if (queues[i].name === name) {
-        return queues[i]
+  Graph.prototype = {
+    add: function(value) {
+      if (value > this.maxval) {
+        this.maxval = value * 1.25
+        var maxval = this.maxval
+        this.bars.forEach(function(b) {
+          var h = b.getAttribute("value") / maxval * 100
+          b.title = h
+          b.style.height = h + "%"
+        })
       }
+
+      var b = document.createElement("span")
+      b.classList.add("bar")
+      b.style.height = (value / this.maxval) * 100 + "%"
+      b.style.background = this.color
+      b.title = value
+      b.setAttribute("value", value)
+      this.node.appendChild(b)
+      this.bars.push(b)
+
+      if (this.bars.length > this.maxitems) {
+        this.node.removeChild(this.bars.shift())
+      }
+
+      this.label.innerHTML = this.name + " " + value
     }
-
-    var node = document.createElement("div")
-    node.classList.add("graph")
-    parent.appendChild(node)
-
-    var q = {name: name, metrics: {}, node: node, maxval: 10}
-
-    queueMetrics.forEach(function(metric) {
-      var n = document.createElement("div")
-      n.classList.add("subgraph")
-      node.appendChild(n)
-      q.metrics[metric.name] = {node: n, bars: [], color: metric.color}
-    })
-
-    queues.push(q)
-    return q
   }
 
   function stats(cb) {
@@ -80,30 +76,48 @@ window.addEventListener("load", function() {
     req.send()
   }
 
-  function addBar(graph, height, value) {
-    var b = document.createElement("span")
-    b.classList.add("bar")
-    b.style.height = height + "%"
-    b.style["border-top"] = "2px solid " + graph.color
-    b.title = height
-    b.setAttribute("value", value)
-    graph.node.appendChild(b)
-    graph.bars.push(b)
-
-    if (graph.bars.length > 60) {
-      graph.node.removeChild(graph.bars.shift())
-    }
-  }
-
   var info = document.getElementById("info")
+
+  var graphs = {}
 
   function pullStats() {
     stats(function(data) {
 
       info.innerHTML = JSON.stringify(data)
 
-      data.queues.forEach(observeQueue)
-      setTimeout(pullStats, 500)
+      data.queues.forEach(function(q) {
+        var set = graphs[q.name]
+
+        if (!graphs[q.name]) {
+          set = {}
+          graphs[q.name] = set
+
+          var info = document.createElement("div")
+          info.classList.add("queue")
+          queues.appendChild(info)
+
+          var nready = document.createElement("div")
+          nready.classList.add("graph")
+          info.appendChild(nready)
+          set.ready = new Graph(nready, "Ready", "#8FC77D")
+
+          var ndelayed = document.createElement("div")
+          ndelayed.classList.add("graph")
+          info.appendChild(ndelayed)
+          set.delayed = new Graph(ndelayed, "Delayed", "#C77DBF")
+
+          var ntoack = document.createElement("div")
+          ntoack.classList.add("graph")
+          info.appendChild(ntoack)
+          set.to_ack = new Graph(ntoack, "To ACK", "#E9A37F")
+        }
+
+        set.ready.add(q.ready)
+        set.delayed.add(q.delayed)
+        set.to_ack.add(q.to_ack)
+      })
+
+      setTimeout(pullStats, 1000)
     })
   }
 

@@ -15,8 +15,8 @@ Installing from source
 
    Describe how to install from source.
 
-Installing from Docker Hub
-==========================
+Installing using Docker
+=======================
 
 .. todo::
 

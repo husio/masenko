@@ -2,7 +2,8 @@ Configuration
 -------------
 
 
-Server default configuration can be altered by setting environment variable.
+Masenko server default configuration can be altered by setting environment
+variable.
 
 =====================   ===================   =========================
  Name                   Default               Description
