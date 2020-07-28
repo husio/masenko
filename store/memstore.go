@@ -36,7 +36,7 @@ type MemStore struct {
 	walFd      io.Closer
 	vacuumSize uint64
 	nextTaskID uint32
-	queues     []*masenko
+	queues     []*namedQueue
 	toack      []*Task
 }
 
@@ -119,7 +119,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 			switch op := op.(type) {
 			case *wal.OpAdd:
 				task := opAddToTask(op)
-				m.masenko(op.Queue).pushTask(task)
+				m.namedQueue(op.Queue).pushTask(task)
 				if op.ID >= m.nextTaskID {
 					m.nextTaskID = op.ID + 1
 				}
@@ -135,7 +135,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 				if !ok {
 					return fmt.Errorf("cannot delete missing task %d", op.ID)
 				}
-				queue := m.masenko(task.Queue)
+				queue := m.namedQueue(task.Queue)
 
 				deleted := false
 				for e := queue.ready.Front(); e != nil; e = e.Next() {
@@ -212,15 +212,15 @@ func openLatestWALFile(walDir string, mode int) (*os.File, error) {
 
 var isWalFileName = regexp.MustCompile(`masenko\.\d+\.wal`).MatchString
 
-// masenko returns a taks queue with a given name. If not yet exist, a queue
+// namedQueue returns a taks queue with a given name. If not yet exist, a queue
 // is created and initialized. Returned result is always safe to use.
-func (m *MemStore) masenko(queueName string) *masenko {
+func (m *MemStore) namedQueue(queueName string) *namedQueue {
 	for _, q := range m.queues {
 		if q.name == queueName {
 			return q
 		}
 	}
-	q := &masenko{
+	q := &namedQueue{
 		name:    queueName,
 		ready:   list.New(),
 		delayed: list.New(),
@@ -278,7 +278,7 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 		m.walSize += uint64(n)
 	}
 
-	m.masenko(task.Queue).pushTask(&task)
+	m.namedQueue(task.Queue).pushTask(&task)
 	return task.ID, nil
 }
 
@@ -344,7 +344,7 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		// Order does not matter.
 		m.toack[i] = m.toack[len(m.toack)-1]
 		m.toack = m.toack[:len(m.toack)-1]
-		m.masenko(task.Queue).ntoack--
+		m.namedQueue(task.Queue).ntoack--
 
 		if ack {
 			if n, err := m.walWr.Append(&wal.OpDelete{ID: task.ID}); err != nil {
@@ -380,7 +380,7 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			executeAt := m.now().Add(delay)
 
 			task.ExecuteAt = &executeAt
-			m.masenko(task.Queue).pushTask(task)
+			m.namedQueue(task.Queue).pushTask(task)
 			if n, err := m.walWr.Append(&wal.OpFail{ID: task.ID}); err != nil {
 				return fmt.Errorf("wal append: %w", err)
 			} else {
@@ -417,7 +417,7 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		} else {
 			m.walSize += uint64(n)
 		}
-		m.masenko(task.Deadqueue).pushTask(&deadTask)
+		m.namedQueue(task.Deadqueue).pushTask(&deadTask)
 		return nil
 	}
 	return ErrNotFound
@@ -584,7 +584,7 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 	for _, op := range tx.ops {
 		switch op := op.(type) {
 		case *wal.OpAdd:
-			tx.m.masenko(op.Queue).pushTask(opAddToTask(op))
+			tx.m.namedQueue(op.Queue).pushTask(opAddToTask(op))
 		case *wal.OpDelete:
 			hasAck = true
 			for i, task := range tx.m.toack {
@@ -594,7 +594,7 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 				// Order does not matter.
 				tx.m.toack[i] = tx.m.toack[len(tx.m.toack)-1]
 				tx.m.toack = tx.m.toack[:len(tx.m.toack)-1]
-				tx.m.masenko(task.Queue).ntoack--
+				tx.m.namedQueue(task.Queue).ntoack--
 				break
 			}
 		default:
@@ -618,7 +618,7 @@ func (tx *MemStoreTransaction) Rollback(ctx context.Context) error {
 	return nil
 }
 
-type masenko struct {
+type namedQueue struct {
 	name string
 	// Tasks that a ready to be consumed. Ordered from front to back.
 	ready *list.List
@@ -632,13 +632,13 @@ type masenko struct {
 }
 
 // Empty returns true if this task queue does not contain any data.
-func (tq *masenko) Empty() bool {
+func (tq *namedQueue) Empty() bool {
 	return tq.ready.Len() == 0 && tq.delayed.Len() == 0 && tq.ntoack == 0
 }
 
 // popTask returns a ready to be consumed task from this queue. Returned task
 // is removed from this queue. Delayed task has a return priority.
-func (tq *masenko) popTask(now time.Time) (*Task, bool) {
+func (tq *namedQueue) popTask(now time.Time) (*Task, bool) {
 	if tq.delayed.Len() > 0 {
 		first := tq.delayed.Front().Value.(*Task)
 		if first.ExecuteAt.Before(now) {
@@ -655,7 +655,7 @@ func (tq *masenko) popTask(now time.Time) (*Task, bool) {
 }
 
 // pushTask adds task to this queue.
-func (tq *masenko) pushTask(t *Task) {
+func (tq *namedQueue) pushTask(t *Task) {
 	if t.ExecuteAt == nil {
 		tq.ready.PushBack(t)
 		return
