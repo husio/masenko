@@ -62,9 +62,9 @@ class Transaction:
 ContextManagedTransaction = Iterator[Transaction]
 
 
-class Client:
+class Connection:
     """
-    :class:`Client` implements Masenko API and maintains the health of the connection with the
+    :class:`Connection` implements Masenko API and maintains the health of the connection with the
     Masenko server.
     """
 
@@ -72,11 +72,11 @@ class Client:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._client = _BareClient()
+        self._client = _BareConnection()
         self._heartbeat: Optional[threading.Thread] = None
 
     def _update_last_request_time(self) -> None:
-        # This is a placeholder for heartbeat optimization. Client must send any request every now
+        # This is a placeholder for heartbeat optimization. Connection must send any request every now
         # and then so if we track when the last request was made, some PING requests can be skipped.
         # To simplify implementation, we do not rely on this just yet.
         pass
@@ -215,7 +215,7 @@ class Client:
             self._update_last_request_time()
 
 
-def _heartbeat_loop(c: Client) -> None:
+def _heartbeat_loop(c: Connection) -> None:
     while True:
         time.sleep(c._heartbeat_sec)
 
@@ -229,7 +229,7 @@ def _heartbeat_loop(c: Client) -> None:
                 return
 
 
-class _BareClient:
+class _BareConnection:
     def __init__(self):
         self._sock: Optional[_LoggedSocket] = None
         self._log = logging.getLogger("masenko.client")
@@ -493,7 +493,7 @@ class _LoggedSocket:
 
 
 @contextmanager
-def connect(host: str, port: int, client_cls=Client):
+def connect(host: str, port: int, connection_cls=Connection):
     """
     Returns a context manager that manintains client connection to a Masenko server.
 
@@ -504,7 +504,7 @@ def connect(host: str, port: int, client_cls=Client):
              masenko.push("register-fruit", {"age": 2, "color": "blue"})
 
     """
-    c = client_cls()
+    c = connection_cls()
     c.connect(host, port)
     try:
         yield c

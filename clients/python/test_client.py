@@ -106,9 +106,9 @@ class SimpleTest(unittest.TestCase):
             with self.assertRaises(client.EmptyError):
                 c.fetch(queues=[queue], timeout="1ms")
 
-    @mock.patch.object(client._BareClient, "ping")
+    @mock.patch.object(client._BareConnection, "ping")
     def test_ping_is_sent_in_the_background(self, ping):
-        c = client.Client()
+        c = client.Connection()
         c._heartbeat_sec = 0.1
         try:
             c.connect(*self.server_addr)
@@ -125,7 +125,7 @@ class SimpleTest(unittest.TestCase):
             c.disconnect()
 
     def test_ping_can_close_connection(self):
-        c = client.Client()
+        c = client.Connection()
         c._heartbeat_sec = 0.1
         try:
             c.connect(*self.server_addr)

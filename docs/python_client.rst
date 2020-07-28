@@ -10,7 +10,7 @@ Python client
 
 .. autofunction:: connect
 
-.. autoclass:: Client
+.. autoclass:: Connection
    :members:
    :inherited-members:
 
