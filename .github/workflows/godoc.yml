@@ -1,0 +1,12 @@
+name: Trigger Go Doc update
+on:
+  push:
+    branches: [unstable]
+jobs:
+  curl:
+    runs-on: ubuntu-latest
+    steps:
+    - name: curl
+      uses: wei/curl@v1
+      with:
+        args: https://proxy.golang.org/github.com/husio/masenko/@v/unstable.info
