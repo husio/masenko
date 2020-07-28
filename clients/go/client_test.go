@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path"
@@ -13,6 +14,120 @@ import (
 	masenkoclient "github.com/husio/masenko/clients/go"
 	"github.com/husio/masenko/masenko"
 )
+
+func ExampleClient_Push() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	masenko, err := masenkoclient.Dial("localhost:12345")
+	if err != nil {
+		panic("cannot connect: " + err.Error())
+	}
+	defer masenko.Close()
+
+	// Task payload can be any JSON serializable data.
+	newUser := struct {
+		Name  string
+		Admin bool
+	}{
+		Name:  "John Smith",
+		Admin: false,
+	}
+
+	if err := masenko.Push(ctx, "register-user", "", newUser, "", 0, nil); err != nil {
+		panic("cannot push task: " + err.Error())
+	}
+}
+
+func ExampleClient_Push_delayed() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	masenko, err := masenkoclient.Dial("localhost:12345")
+	if err != nil {
+		panic("cannot connect: " + err.Error())
+	}
+	defer masenko.Close()
+
+	// Task payload can be any JSON serializable data.
+	email := struct {
+		Subject string
+		To      string
+		Content string
+	}{
+		Subject: "Welcome!",
+		To:      "john.smith@example.com",
+		Content: "Warm welcome John Smith.",
+	}
+
+	// Instead of sending an email now, delay it by at least 10 minutes.
+	// Delayed task cannot be consumed until the deadline is reached.
+	future := time.Now().Add(10 * time.Minute)
+
+	if err := masenko.Push(ctx, "send-email", "", email, "", 0, &future); err != nil {
+		panic("cannot push task: " + err.Error())
+	}
+}
+
+func ExampleClient_Fetch() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	masenko, err := masenkoclient.Dial("localhost:12345")
+	if err != nil {
+		panic("cannot connect: " + err.Error())
+	}
+	defer masenko.Close()
+
+	for {
+		response, err := masenko.Fetch(ctx, []string{"priority", "default"})
+		if err != nil {
+			panic("cannot fetch: " + err.Error())
+		}
+
+		switch response.Name {
+		case "register-user":
+			var newUser struct {
+				Name  string
+				Admin bool
+			}
+			if err := json.Unmarshal(response.Payload, &newUser); err != nil {
+				panic("cannot unmarshal register-user task payload: " + err.Error())
+			}
+			err = handleRegisterUser(newUser)
+		case "send-email":
+			var email struct {
+				Subject string
+				To      string
+				Content string
+			}
+			if err := json.Unmarshal(response.Payload, &email); err != nil {
+				panic("cannot unmarshal send-email task payload: " + err.Error())
+			}
+			err = handleSendEmail(email)
+		default:
+			if err := masenko.Nack(ctx, response.ID); err != nil {
+				panic("cannot NACK: " + err.Error())
+			}
+		}
+
+		if err == nil {
+			if err := masenko.Ack(ctx, response.ID); err != nil {
+				panic("cannot ACK: " + err.Error())
+			}
+		} else {
+			if err := masenko.Nack(ctx, response.ID); err != nil {
+				panic("cannot NACK: " + err.Error())
+			}
+		}
+	}
+}
+
+// handleRegisterUser is a stub function.
+func handleRegisterUser(interface{}) error { return nil }
+
+// handleSendEmail is a stub function.
+func handleSendEmail(interface{}) error { return nil }
 
 func TestConnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
