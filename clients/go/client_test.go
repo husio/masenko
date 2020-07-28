@@ -15,15 +15,15 @@ import (
 	"github.com/husio/masenko/masenko"
 )
 
-func ExampleClient_Push() {
+func ExampleHeartbeatClient_Push() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	masenko, err := masenkoclient.Dial("localhost:12345")
+	mclient, err := masenkoclient.Dial("localhost:12345")
 	if err != nil {
 		panic("cannot connect: " + err.Error())
 	}
-	defer masenko.Close()
+	defer mclient.Close()
 
 	// Task payload can be any JSON serializable data.
 	newUser := struct {
@@ -34,20 +34,20 @@ func ExampleClient_Push() {
 		Admin: false,
 	}
 
-	if err := masenko.Push(ctx, "register-user", "", newUser, "", 0, nil); err != nil {
+	if err := mclient.Push(ctx, "register-user", "", newUser, "", 0, nil); err != nil {
 		panic("cannot push task: " + err.Error())
 	}
 }
 
-func ExampleClient_Push_delayed() {
+func ExampleHeartbeatClient_Push_delayed() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	masenko, err := masenkoclient.Dial("localhost:12345")
+	mclient, err := masenkoclient.Dial("localhost:12345")
 	if err != nil {
 		panic("cannot connect: " + err.Error())
 	}
-	defer masenko.Close()
+	defer mclient.Close()
 
 	// Task payload can be any JSON serializable data.
 	email := struct {
@@ -64,23 +64,23 @@ func ExampleClient_Push_delayed() {
 	// Delayed task cannot be consumed until the deadline is reached.
 	future := time.Now().Add(10 * time.Minute)
 
-	if err := masenko.Push(ctx, "send-email", "", email, "", 0, &future); err != nil {
+	if err := mclient.Push(ctx, "send-email", "", email, "", 0, &future); err != nil {
 		panic("cannot push task: " + err.Error())
 	}
 }
 
-func ExampleClient_Fetch() {
+func ExampleHeartbeatClient_Fetch() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	masenko, err := masenkoclient.Dial("localhost:12345")
+	mclient, err := masenkoclient.Dial("localhost:12345")
 	if err != nil {
 		panic("cannot connect: " + err.Error())
 	}
-	defer masenko.Close()
+	defer mclient.Close()
 
 	for {
-		response, err := masenko.Fetch(ctx, []string{"priority", "default"})
+		response, err := mclient.Fetch(ctx, []string{"priority", "default"})
 		if err != nil {
 			panic("cannot fetch: " + err.Error())
 		}
@@ -106,17 +106,17 @@ func ExampleClient_Fetch() {
 			}
 			err = handleSendEmail(email)
 		default:
-			if err := masenko.Nack(ctx, response.ID); err != nil {
+			if err := mclient.Nack(ctx, response.ID); err != nil {
 				panic("cannot NACK: " + err.Error())
 			}
 		}
 
 		if err == nil {
-			if err := masenko.Ack(ctx, response.ID); err != nil {
+			if err := mclient.Ack(ctx, response.ID); err != nil {
 				panic("cannot ACK: " + err.Error())
 			}
 		} else {
-			if err := masenko.Nack(ctx, response.ID); err != nil {
+			if err := mclient.Nack(ctx, response.ID); err != nil {
 				panic("cannot NACK: " + err.Error())
 			}
 		}
