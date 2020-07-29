@@ -2,6 +2,9 @@
 <html>
 <head>
   <title>Task Queue</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="/js/mithril.js"></script>
 <style>
 html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
 #queues { display: flex; justify-content: space-around; align-items: center; height: 60%; width: 100%; flex-direction: row;}
@@ -15,113 +18,69 @@ html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
   <code id="info"></code>
 </body>
 <script>
+var QueueList = {
+  queues: [],
+  all: function() { return Object.values(QueueList.queues) },
+  loadQueues: function() {
+    return m.request({method: "GET", url: "/stats.json"})
+      .then(function(result) {
+        result.queues.forEach(function(data) {
+          var queue = QueueList.queues[data.name]
+          if (!queue) {
+            queue = {
+              maxval: 10,
+              ready: [],
+              to_ack: [],
+              delayed: [],
+              name: data.name,
+            }
+            QueueList.queues[data.name] = queue
+          }
+          queue.ready.push(data.ready)
+          queue.to_ack.push(data.to_ack)
+          queue.delayed.push(data.delayed)
+
+          queue.maxval = Math.max(queue.maxval, data.ready, data.to_ack, data.delayed)
+
+          if (queue.ready.length > 50) { queue.ready.shift() }
+          if (queue.to_ack.length > 50) { queue.to_ack.shift() }
+          if (queue.delayed.length > 50) { queue.delayed.shift() }
+        })
+      })
+  },
+}
+
+setInterval(QueueList.loadQueues, 1000)
+
+var QueuesView = {
+  oninit: QueueList.loadQueues,
+  view: function() {
+    return m("div", {className: "queues"}, QueueList.all().map(function(q) {
+      return m("div", [
+        q.name,
+        m("div", {className: "graph"}, q.ready.map(function(val) {
+            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#6EC960"}})
+          }),
+          q.ready[q.ready.length - 1],
+        ),
+        m("div", {className: "graph"}, q.to_ack.map(function(val) {
+            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#C0C960"}})
+          }),
+          q.to_ack[q.to_ack.length - 1],
+        ),
+        m("div", {className: "graph"}, q.delayed.map(function(val) {
+            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#C18DC8"}})
+          }),
+          q.delayed[q.delayed.length - 1],
+        )
+      ])
+    }))
+  }
+}
+
 window.addEventListener("load", function() {
   var queues = document.getElementById("queues")
-
-
-  function Graph(node, name, color) {
-    var n = document.createElement("div")
-    n.classList.add("graph")
-    node.appendChild(n)
-
-    this.label = document.createElement("span")
-    this.label.innerHTML = name + " 0"
-    node.appendChild(this.label)
-
-    this.node = n
-    this.name = name
-    this.color = color
-    this.maxval = 0
-    this.maxitems = 60
-    this.bars = []
-  }
-
-  Graph.prototype = {
-    add: function(value) {
-      if (value > this.maxval) {
-        this.maxval = value * 1.25
-        var maxval = this.maxval
-        this.bars.forEach(function(b) {
-          var h = b.getAttribute("value") / maxval * 100
-          b.title = h
-          b.style.height = h + "%"
-        })
-      }
-
-      var b = document.createElement("span")
-      b.classList.add("bar")
-      b.style.height = (value / this.maxval) * 100 + "%"
-      b.style.background = this.color
-      b.title = value
-      b.setAttribute("value", value)
-      this.node.appendChild(b)
-      this.bars.push(b)
-
-      if (this.bars.length > this.maxitems) {
-        this.node.removeChild(this.bars.shift())
-      }
-
-      this.label.innerHTML = this.name + " " + value
-    }
-  }
-
-  function stats(cb) {
-    var req = new XMLHttpRequest();
-    req.open('GET', '/stats.json', true);
-    req.onload = function() {
-      if (this.status === 200) {
-        cb(JSON.parse(this.response))
-      }
-    }
-    req.send()
-  }
-
-  var info = document.getElementById("info")
-
-  var graphs = {}
-
-  function pullStats() {
-    stats(function(data) {
-
-      info.innerHTML = JSON.stringify(data)
-
-      data.queues.forEach(function(q) {
-        var set = graphs[q.name]
-
-        if (!graphs[q.name]) {
-          set = {}
-          graphs[q.name] = set
-
-          var info = document.createElement("div")
-          info.classList.add("queue")
-          queues.appendChild(info)
-
-          var nready = document.createElement("div")
-          nready.classList.add("graph")
-          info.appendChild(nready)
-          set.ready = new Graph(nready, "Ready", "#8FC77D")
-
-          var ndelayed = document.createElement("div")
-          ndelayed.classList.add("graph")
-          info.appendChild(ndelayed)
-          set.delayed = new Graph(ndelayed, "Delayed", "#C77DBF")
-
-          var ntoack = document.createElement("div")
-          ntoack.classList.add("graph")
-          info.appendChild(ntoack)
-          set.to_ack = new Graph(ntoack, "To ACK", "#E9A37F")
-        }
-
-        set.ready.add(q.ready)
-        set.delayed.add(q.delayed)
-        set.to_ack.add(q.to_ack)
-      })
-
-      setTimeout(pullStats, 1000)
-    })
-  }
-
-  pullStats()
+  m.mount(queues, QueuesView)
 })
 
 </script>

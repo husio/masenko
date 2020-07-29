@@ -26,6 +26,7 @@ func NewWebUI(queue store.Queue, metrics Stater) *WebUI {
 }
 
 //go:generate inlineasset webui WebUIHTML ./webui.html ./asset_webui.html.go
+//go:generate inlineasset webui MithrilJS ./mithril.min.js ./asset_mithril.js.go
 
 func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
@@ -33,6 +34,8 @@ func (ui *WebUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "index.html", startTime, bytes.NewReader(WebUIHTML))
 	case "/stats.json":
 		ui.handleCurrentStats(w, r)
+	case "/js/mithril.js":
+		http.ServeContent(w, r, "mithril.html", startTime, bytes.NewReader(MithrilJS))
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}
