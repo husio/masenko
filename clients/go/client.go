@@ -40,6 +40,27 @@ type Client interface {
 	Nack(ctx context.Context, taskID uint32) error
 	// Close the client. Release all resources allocated.
 	Close() error
+
+	// Tx returns a new transaction that executes all requested operations
+	// atomically.
+	Tx(ctx context.Context) Transaction
+}
+
+// Transaction is an interface implemented by Masenko transaction wrapper. It
+// allows to collect operations and execute them atomically together. Each
+// transaction can be executed only once.
+// To execute a transaction, Commit method must be called. Transaction that is
+// not committed is dropped.
+type Transaction interface {
+	// Push schedules a task execution. Payload must be a (usually JSON)
+	// serializable.
+	Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error
+	// Fetch blocks until a task can be returned or context timeout is
+	// reached. If timed out without being able to return a task, ErrEmpty
+	// is returned (even if caused by context timeout).
+	Ack(ctx context.Context, taskID uint32) error
+	// Commit executes all operations collected within this transaction.
+	Commit(context.Context) error
 }
 
 // Dial returns a Client connected to a Masenko server reachable under provided
@@ -91,6 +112,56 @@ func (hb *HeartbeatClient) heartbeatLoop() {
 				hb.Close()
 			}
 		}
+	}
+}
+
+func (hb *HeartbeatClient) Tx(ctx context.Context) Transaction {
+	return &transaction{hb: hb}
+}
+
+type transaction struct {
+	hb       *HeartbeatClient
+	requests []request
+}
+
+func (t *transaction) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
+	taskPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal task payload: %w", err)
+	}
+	requestPayload, err := json.Marshal(pushRequest{
+		Name:      taskName,
+		Queue:     queueName,
+		Deadqueue: deadqueue,
+		Payload:   taskPayload,
+		Retry:     retry,
+		ExecuteAt: executeAt,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+	t.requests = append(t.requests, request{verb: "PUSH", payload: requestPayload})
+	return nil
+}
+
+func (t *transaction) Ack(ctx context.Context, taskID uint32) error {
+	payload, err := json.Marshal(ackRequest{TaskID: taskID})
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+	t.requests = append(t.requests, request{verb: "ACK", payload: payload})
+	return nil
+}
+
+func (t *transaction) Commit(ctx context.Context) error {
+	if len(t.requests) == 0 {
+		return nil
+	}
+	select {
+	case <-t.hb.stop:
+		return ErrClosed
+	default:
+		return t.hb.bc.Atomic(ctx, t.requests)
 	}
 }
 
@@ -155,6 +226,61 @@ type bareClient struct {
 	mu sync.Mutex
 	rd *bufio.Reader
 	wr *bufio.Writer
+}
+
+func (c *bareClient) Atomic(ctx context.Context, requests []request) error {
+	c.mu.Lock()
+
+	if _, err := c.wr.WriteString("ATOMIC\n"); err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("write ATOMIC: %w", err)
+	}
+	for i, r := range requests {
+		if _, err := fmt.Fprintf(c.wr, "%s %s\n", r.verb, string(r.payload)); err != nil {
+			c.mu.Unlock()
+			return fmt.Errorf("write %d: %w", i, err)
+		}
+	}
+	if _, err := c.wr.WriteString("DONE\n"); err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("write DONE: %w", err)
+	}
+	if err := c.wr.Flush(); err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("write flush: %w", err)
+	}
+
+	line, err := c.rd.ReadBytes('\n')
+	c.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	line = bytes.TrimSpace(line)
+	chunks := bytes.SplitN(line, []byte{' '}, 2)
+	if len(chunks) != 2 {
+		return fmt.Errorf("invalid respones: %s", line)
+	}
+
+	switch code := string(chunks[0]); code {
+	case "OK":
+		return nil
+	case "ERR":
+		var info struct {
+			Msg string
+		}
+		if err := json.Unmarshal(chunks[1], &info); err != nil {
+			return fmt.Errorf("unmarshal error payload: %s", string(chunks[1]))
+		}
+		return errors.New(info.Msg)
+	default:
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, code)
+	}
+}
+
+type request struct {
+	verb    string
+	payload []byte
 }
 
 func (c *bareClient) Ping(ctx context.Context) error {

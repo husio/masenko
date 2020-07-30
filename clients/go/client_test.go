@@ -69,6 +69,29 @@ func ExampleHeartbeatClient_Push_delayed() {
 	}
 }
 
+func ExampleHeartbeatClient_Tx() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mclient, err := masenkoclient.Dial("localhost:12345")
+	if err != nil {
+		panic("cannot connect: " + err.Error())
+	}
+	defer mclient.Close()
+
+	tx := mclient.Tx(ctx)
+
+	if err := tx.Push(ctx, "register-user", "", "John Smith", "", 0, nil); err != nil {
+		panic("cannot push task: " + err.Error())
+	}
+	if err := tx.Ack(ctx, 12345); err != nil {
+		panic("cannot ack task 12345: " + err.Error())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		panic("cannot commit transaction: " + err.Error())
+	}
+}
+
 func ExampleHeartbeatClient_Fetch() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -210,6 +233,57 @@ func TestAcknowledge(t *testing.T) {
 	defer cancel()
 	if result, err := c.Fetch(ctx2, []string{"my-queue"}); !errors.Is(err, masenkoclient.ErrEmpty) {
 		t.Fatalf("want ErrEmpty, got %+v, %#v", err, result)
+	}
+}
+
+func TestTransactionSuccess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	c := RunServerAndClient(ctx, t)
+
+	tx := c.Tx(ctx)
+	if err := tx.Push(ctx, "my-task", "my-queue", nil, "", 20, nil); err != nil {
+		t.Fatalf("cannot push: %s", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("cannot commit: %s", err)
+	}
+
+	response, err := c.Fetch(ctx, []string{"my-queue"})
+	if err != nil {
+		t.Fatalf("cannot fetch: %s", err)
+	}
+	if response.Name != "my-task" {
+		t.Fatalf("unexpected task: %+v", response)
+	}
+
+	tx = c.Tx(ctx)
+	if err := tx.Push(ctx, "another-task", "my-queue", map[string]string{"dict": "payload"}, "", 0, nil); err != nil {
+		t.Fatalf("cannot push: %s", err)
+	}
+	if err := tx.Ack(ctx, response.ID); err != nil {
+		t.Fatalf("cannot ack: %s", err)
+	}
+	if err := tx.Push(ctx, "yet-another-task", "my-queue", "a string payload", "", 0, nil); err != nil {
+		t.Fatalf("cannot push: %s", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("cannot commit: %s", err)
+	}
+
+	// There should be two tasks now.
+
+	if response, err := c.Fetch(ctx, []string{"my-queue"}); err != nil {
+		t.Fatalf("cannot fetch: %s", err)
+	} else if response.Name != "another-task" {
+		t.Fatalf("unexpected task: %+v", response)
+	}
+
+	if response, err := c.Fetch(ctx, []string{"my-queue"}); err != nil {
+		t.Fatalf("cannot fetch: %s", err)
+	} else if response.Name != "yet-another-task" {
+		t.Fatalf("unexpected task: %+v", response)
 	}
 }
 
