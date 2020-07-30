@@ -146,10 +146,10 @@ Only `PUSH` and `ACK` commands are allowed inside of a transaction.
 
 .. code::
 
-   ATOMIC\n
-   PUSH {"name": "register-user", "payload": {"name": "John", "admin": false}}
-   PUSH {"name": "send-email", "payload": {"to": "john@example.com", "subject": "Hello"}}
-   ACK {"id": 123456}
-   DONE\n
+   ATOMIC \n
+   PUSH {"name": "register-user", "payload": {"name": "John", "admin": false}} \n
+   PUSH {"name": "send-email", "payload": {"to": "john@example.com", "subject": "Hello"}} \n
+   ACK {"id": 123456} \n
+   DONE \n
 
 Response: `OK {}`
