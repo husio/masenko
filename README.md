@@ -5,10 +5,10 @@
 
 # Masenko
 
-*Masenko is an open source background task manager with a focus on reliability
-and complete, easy to use API.*
+Masenko is an open source background task manager with a focus on reliability
+and complete, easy to use API.
 
 
-See the [documentation](https://masenko.readthedocs.io/en/latest/) for more information.
+See the [documentation](https://masenko.readthedocs.io/en/latest/) for more details.
 
 [Unreliable benchmarks over time](http://benchsrv.herokuapp.com/).
