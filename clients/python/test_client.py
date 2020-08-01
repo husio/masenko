@@ -85,7 +85,7 @@ class SimpleTest(unittest.TestCase):
             task = c.fetch(timeout=1, queues=[queue])
             assert task["name"] == "my-task"
 
-            with c.atomic() as tx:
+            with c.transaction() as tx:
                 tx.ack(task["id"])
                 for _ in range(10):
                     tx.push("another-task", queue=queue)
@@ -95,7 +95,7 @@ class SimpleTest(unittest.TestCase):
         with client.connect(*self.server_addr) as c:
             # Transaction commit must fail. Any operation within the transaction must be buffered.
             with self.assertRaises(client.ResponseError):
-                with c.atomic() as tx:
+                with c.transaction() as tx:
                     try:
                         tx.push("a-task", queue=queue)
                         tx.ack(1234567890)

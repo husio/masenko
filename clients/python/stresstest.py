@@ -35,7 +35,7 @@ def run(batch_size: int):
 
             start = time.time()
 
-            with c.atomic() as tx:
+            with c.transaction() as tx:
                 payload = {
                     "something_id": 1241244,
                     "client_id": 104922,

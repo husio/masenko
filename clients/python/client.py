@@ -197,20 +197,20 @@ class Connection:
             self._update_last_request_time()
 
     @contextmanager
-    def atomic(self) -> ContextManagedTransaction:
+    def transaction(self) -> ContextManagedTransaction:
         """
         Returns a transaction context manager. All operations executed on returned transactions are
         accumulated and executed on the context cleanup.
 
         All operations are cached and executed on scope exit::
 
-            with masenko_client.atomic() as tx:
+            with masenko_client.transaction() as tx:
                 tx.push("first-task")
                 tx.push("second-task")
                 tx.ack(previously_processed_task_id)
         """
         with self._lock:
-            with self._client.atomic() as tx:
+            with self._client.transaction() as tx:
                 yield tx
             self._update_last_request_time()
 
@@ -286,7 +286,7 @@ class _BareConnection:
             raise UnexpectedResponseError(verb, payload)
 
     @contextmanager
-    def atomic(self) -> ContextManagedTransaction:
+    def transaction(self) -> ContextManagedTransaction:
         """
         Begin a transaction.
         """
