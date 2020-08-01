@@ -3,8 +3,6 @@
 Package masenkoclient provides an implementation of a client that allows to
 comunicate with a single Masenko server.
 
-x
-
 */
 package masenkoclient
 
