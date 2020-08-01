@@ -113,6 +113,8 @@ func (hb *HeartbeatClient) heartbeatLoop() {
 	}
 }
 
+// Tx returns a new transaction that executes all requested operations
+// atomically. Only a subset of requests can be executed within a transaction.
 func (hb *HeartbeatClient) Tx(ctx context.Context) Transaction {
 	return &transaction{hb: hb}
 }
@@ -151,6 +153,10 @@ func (t *transaction) Ack(ctx context.Context, taskID uint32) error {
 	return nil
 }
 
+// Commit sends the transaction to the server which cause atomic execution of
+// all accumulated operations in specified order. Only if all operations were
+// successful, the server state is updated. Any operation failure cause the
+// whole transaction to be aborted and no change is made to the server state.
 func (t *transaction) Commit(ctx context.Context) error {
 	if len(t.requests) == 0 {
 		return nil
@@ -163,6 +169,8 @@ func (t *transaction) Commit(ctx context.Context) error {
 	}
 }
 
+// Ack marks the task as processed. This operation removes the task from the
+// server.
 func (hb *HeartbeatClient) Ack(ctx context.Context, taskID uint32) error {
 	select {
 	case <-hb.stop:
@@ -172,6 +180,10 @@ func (hb *HeartbeatClient) Ack(ctx context.Context, taskID uint32) error {
 	}
 }
 
+// Nack marks the task processing as failed. This operation reschedules the
+// task accodring to the retry policy. Depending on the retry configuration and
+// failures count, this task might be rescheduled for future processing or
+// moved to a dead letter queue.
 func (hb *HeartbeatClient) Nack(ctx context.Context, taskID uint32) error {
 	select {
 	case <-hb.stop:
@@ -181,6 +193,25 @@ func (hb *HeartbeatClient) Nack(ctx context.Context, taskID uint32) error {
 	}
 }
 
+// Push schedules a task execution.
+//
+// Task name must be provided.
+//
+// Queue name is optional name of the queue that this task is pushed to. Leave
+// empty to use server default queue.
+//
+// Payload is an optional JSON serializable data. Can be nil.
+//
+// Dead letter queue is an optional queue name that this task is moved to after
+// reaching failed processing attempts limit. Use empty string to disable.
+//
+// Retry is the number of attempts that this task should be retried after a
+// failed processing. Use zero to use server default value.
+//
+// Execute at is an optional time that this task should be executed at the
+// earliest. Providing a value allows to schedule task execution in the future.
+// Keep in mind that Masenko is not a database and this functionality should be
+// used with caution.
 func (hb *HeartbeatClient) Push(ctx context.Context, taskName string, queueName string, payload interface{}, deadqueue string, retry uint8, executeAt *time.Time) error {
 	select {
 	case <-hb.stop:
