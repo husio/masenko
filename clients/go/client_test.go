@@ -79,6 +79,8 @@ func ExampleHeartbeatClient_Tx() {
 	}
 	defer mclient.Close()
 
+	// Create a new transaction instance that will aggregate one or more
+	// operations.
 	tx := mclient.Tx(ctx)
 
 	if err := tx.Push(ctx, "register-user", "", "John Smith", "", 0, nil); err != nil {
@@ -87,6 +89,13 @@ func ExampleHeartbeatClient_Tx() {
 	if err := tx.Ack(ctx, 12345); err != nil {
 		panic("cannot ack task 12345: " + err.Error())
 	}
+
+	// Until Commit method is called, all operations executed on
+	// transaction are cached and not shared with the Masenko server.
+	// Transaction commit sends all operations to the server and executes
+	// atomically.
+	// There is no transaction rollback. To abort any executed so far
+	// transaction operation, simply do not commit the transaction.
 	if err := tx.Commit(ctx); err != nil {
 		panic("cannot commit transaction: " + err.Error())
 	}
