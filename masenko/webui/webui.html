@@ -7,25 +7,37 @@
   <script src="/js/mithril.js"></script>
 <style>
 html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
-#queues { display: flex; justify-content: space-around; align-items: center; height: 60%; width: 100%; flex-direction: row;}
-#queues .info {}
-#queues .graph { display: flex; width: 200px; height: 80px;}
-#queues .graph .bar { width: 100%; margin: 0; padding: 0; display: inline-block; align-self: flex-end; }
+#app .row { display: flex; width: 100%; justify-content: space-around; }
+#app .graph { border: 1px solid #DCDCDC; width: 200px; height: 80px; display: flex;}
+#app .graph .bar { display: flex; width: 100%; max-width: 10px; margin: 0; padding: 0; align-self: flex-end; align-items: center; flex-direction: row; }
+#app .graph .bar:hover { background: black !important; }
 </style>
 </head>
 <body>
-  <div id="queues"></div>
+  <div id="app"></div>
   <code id="info"></code>
 </body>
 <script>
-var QueueList = {
-  queues: [],
-  all: function() { return Object.values(QueueList.queues) },
-  loadQueues: function() {
+var Stats = {
+  _queues: {},
+  _metrics: {},
+
+  queues: function() {
+    return Object.values(Stats._queues).sort()
+  },
+  metrics: function() {
+    return Object.entries(Stats._metrics).sort().map(function(pair) {
+      return {name: pair[0], value: pair[1]}
+    })
+  },
+  refresh: function() {
     return m.request({method: "GET", url: "/stats.json"})
       .then(function(result) {
+
+        Stats._metrics = result.metrics
+
         result.queues.forEach(function(data) {
-          var queue = QueueList.queues[data.name]
+          var queue = Stats._queues[data.name]
           if (!queue) {
             queue = {
               maxval: 10,
@@ -34,7 +46,7 @@ var QueueList = {
               delayed: [],
               name: data.name,
             }
-            QueueList.queues[data.name] = queue
+            Stats._queues[data.name] = queue
           }
           queue.ready.push(data.ready)
           queue.to_ack.push(data.to_ack)
@@ -50,37 +62,78 @@ var QueueList = {
   },
 }
 
-setInterval(QueueList.loadQueues, 1000)
+setInterval(Stats.refresh, 1500)
 
-var QueuesView = {
-  oninit: QueueList.loadQueues,
+var App = {
+  oninit: Stats.loadQueues,
   view: function() {
-    return m("div", {className: "queues"}, QueueList.all().map(function(q) {
-      return m("div", [
-        q.name,
-        m("div", {className: "graph"}, q.ready.map(function(val) {
-            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#6EC960"}})
-          }),
-          q.ready[q.ready.length - 1],
-        ),
-        m("div", {className: "graph"}, q.to_ack.map(function(val) {
-            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#C0C960"}})
-          }),
-          q.to_ack[q.to_ack.length - 1],
-        ),
-        m("div", {className: "graph"}, q.delayed.map(function(val) {
-            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#C18DC8"}})
-          }),
-          q.delayed[q.delayed.length - 1],
-        )
-      ])
-    }))
+    return [
+      renderQueueListView(Stats.queues()),
+      renderMetrics(Stats.metrics()),
+    ]
   }
 }
 
+
+function renderMetrics(metrics) {
+  return m("table", [
+    m("thead",
+      m("tr", [
+        m("th", "Name"),
+        m("th", "Value"),
+      ])
+    ),
+    metrics.map(function(metric) {
+      return m("tr", [
+        m("td", metric.name),
+        m("td", metric.value),
+      ])
+    }),
+  ])
+}
+
+
+function renderQueueListView(queues) {
+  return m("table", [
+    m("thead",
+      m("tr", [
+        m("th", "Queue name"),
+        m("th", "Ready"),
+        m("th", "To ACK"),
+        m("th", "Delayed"),
+      ]),
+    ),
+    ], queues.map(function(q) {
+    return m("tr", [
+      m("td", [
+        q.name,
+      ]),
+      m("td",
+        m("div", {className: "graph"}, q.ready.map(function(val) {
+            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#6EC960"}, title: val})
+          }),
+        )
+      ),
+      m("td",
+        m("div", {className: "graph"}, q.to_ack.map(function(val) {
+            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#C0C960"}, title: val})
+          }),
+        ),
+      ),
+      m("td",
+        m("div", {className: "graph"}, q.delayed.map(function(val) {
+            return m("span", {className: "bar", style: {height: (val / q.maxval) * 100 + "%", background: "#C18DC8"}, title: val})
+          }),
+        ),
+      )
+    ])
+  }))
+}
+
+
 window.addEventListener("load", function() {
-  var queues = document.getElementById("queues")
-  m.mount(queues, QueuesView)
+  var queues = document.getElementById("app")
+  m.mount(queues, App)
 })
 
 </script>
