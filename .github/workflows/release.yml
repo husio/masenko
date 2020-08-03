@@ -17,3 +17,17 @@ jobs:
           registry: docker.pkg.github.com
           repository: husio/masenko/masenko
           tag_with_ref: true
+build:
+    name: Build binary and attach to the release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Build
+        run: |
+           make build-masenko
+      - name: upload binary artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: binaries
+          path: bin/
