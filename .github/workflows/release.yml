@@ -27,7 +27,9 @@ jobs:
         run: |
            make build-masenko
       - name: upload binary artifacts
-        uses: actions/upload-artifact@v2
+        uses: svenstaro/upload-release-action@v2
         with:
-          name: binaries
-          path: bin/
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file_glob: bin/*
+          tag: ${{ github.ref }}
+          overwrite: true
