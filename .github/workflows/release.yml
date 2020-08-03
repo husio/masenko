@@ -17,22 +17,3 @@ jobs:
           registry: docker.pkg.github.com
           repository: husio/masenko/masenko
           tag_with_ref: true
-  create_binary_artifact:
-    name: Build binary and attach to the release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Build assets
-        run: |
-           make build-masenko
-      - name: Upload release asset
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: bin/masenko
-          asset_name: masenko_static.bin
-          asset_content_type: application/x-executable
