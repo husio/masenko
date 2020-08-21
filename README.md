@@ -16,6 +16,29 @@ See the [documentation](https://masenko.readthedocs.io/en/latest/) for more deta
 [Unreliable benchmarks over time](http://benchsrv.herokuapp.com/).
 
 
+## [Netcat](https://en.wikipedia.org/wiki/Netcat) example
+
+```
+% nc localhost 12345
+PUSH {"name": "my-task"}
+OK {"id":1}
+PUSH {"name": "another-task", "queue": "highprio"}
+OK {"id":2}
+FETCH {"queues": ["default", "highprio"]}
+OK {"id":1,"queue":"default","name":"my-task"}
+ACK {"id": 1}
+OK {}
+FETCH {"queues": ["default", "highprio"]}
+OK {"id":2,"queue":"highprio","name":"another-task"}
+NACK {"id": 2}
+OK {}
+FETCH {"queues": ["default", "highprio"]}
+OK {"id":2,"queue":"highprio","name":"another-task","failures":1}
+ACK {"id": 2}
+OK {}
+```
+
+
 ## Go example
 
 
