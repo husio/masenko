@@ -1,62 +1,67 @@
 package masenko
 
-import "sync/atomic"
+import (
+	"fmt"
 
-func NewMetricsCounter() *MetricsCounter {
-	return &MetricsCounter{}
-}
+	"github.com/prometheus/client_golang/prometheus"
+)
 
-type MetricsCounter struct {
-	clients      int64
-	push         int64
-	fetch        int64
-	ack          int64
-	nack         int64
-	request      int64
-	requestError int64
-}
-
-func (m *MetricsCounter) State() map[string]int64 {
-	cpy := map[string]int64{
-		"clients":       atomic.LoadInt64(&m.clients),
-		"push":          atomic.LoadInt64(&m.push),
-		"fetch":         atomic.LoadInt64(&m.fetch),
-		"ack":           atomic.LoadInt64(&m.ack),
-		"nack":          atomic.LoadInt64(&m.nack),
-		"request":       atomic.LoadInt64(&m.request),
-		"request-error": atomic.LoadInt64(&m.requestError),
+// NewMetrics returns an instance of Prometheus metrics collector that
+// registers within given registerer. No counter is exposed and all metric
+// collecting is exposed via specialized methods.
+func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
+	m := &Metrics{
+		clients: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "masenko",
+			Name:      "clients_total",
+			Help:      "Current number of connected clients.",
+		}),
+		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "masenko",
+			Name:      "requests_total",
+			Help:      "Total number of requests processed.",
+		}, []string{"verb"}),
+		responses: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "masenko",
+			Name:      "responses_total",
+			Help:      "Total number of responses.",
+		}, []string{"verb"}),
 	}
-	return cpy
+	if err := reg.Register(m.clients); err != nil {
+		return nil, fmt.Errorf("register clients: %w", err)
+	}
+	if err := reg.Register(m.requests); err != nil {
+		return nil, fmt.Errorf("register requests: %w", err)
+	}
+	if err := reg.Register(m.responses); err != nil {
+		return nil, fmt.Errorf("register responses: %w", err)
+	}
+	return m, nil
 }
 
-func (c *MetricsCounter) ClientConnected() {
-	atomic.AddInt64(&c.clients, 1)
+// Metrics clubs together various metric counters and expose a single interface
+// to collect data.
+type Metrics struct {
+	clients   prometheus.Gauge
+	requests  *prometheus.CounterVec
+	responses *prometheus.CounterVec
 }
 
-func (c *MetricsCounter) ClientDisconnected() {
-	atomic.AddInt64(&c.clients, -1)
-}
+// IncrClient must be called when a new client is connected.
+func (m *Metrics) IncrClient() { m.clients.Inc() }
 
-func (c *MetricsCounter) TaskPushed() {
-	atomic.AddInt64(&c.push, 1)
-}
+// DecrClient must be called when a client disconnects.
+func (m *Metrics) DecrClient() { m.clients.Dec() }
 
-func (c *MetricsCounter) TaskFetched() {
-	atomic.AddInt64(&c.fetch, 1)
-}
-
-func (c *MetricsCounter) TaskAcked() {
-	atomic.AddInt64(&c.ack, 1)
-}
-
-func (c *MetricsCounter) TaskNacked() {
-	atomic.AddInt64(&c.nack, 1)
-}
-
-func (c *MetricsCounter) RequestHandled() {
-	atomic.AddInt64(&c.request, 1)
-}
-
-func (c *MetricsCounter) RequestErrored() {
-	atomic.AddInt64(&c.requestError, 1)
-}
+func (m *Metrics) IncrFetch()         { m.requests.With(prometheus.Labels{"verb": "FETCH"}).Inc() }
+func (m *Metrics) IncrPush()          { m.requests.With(prometheus.Labels{"verb": "PUSH"}).Inc() }
+func (m *Metrics) IncrAtomic()        { m.requests.With(prometheus.Labels{"verb": "ATOMIC"}).Inc() }
+func (m *Metrics) IncrAck()           { m.requests.With(prometheus.Labels{"verb": "ACK"}).Inc() }
+func (m *Metrics) IncrNack()          { m.requests.With(prometheus.Labels{"verb": "NACK"}).Inc() }
+func (m *Metrics) IncrPing()          { m.requests.With(prometheus.Labels{"verb": "PING"}).Inc() }
+func (m *Metrics) IncrInfo()          { m.requests.With(prometheus.Labels{"verb": "INFO"}).Inc() }
+func (m *Metrics) IncrQuit()          { m.requests.With(prometheus.Labels{"verb": "QUIT"}).Inc() }
+func (m *Metrics) IncrResponseOK()    { m.responses.With(prometheus.Labels{"verb": "OK"}).Inc() }
+func (m *Metrics) IncrResponseErr()   { m.responses.With(prometheus.Labels{"verb": "ERR"}).Inc() }
+func (m *Metrics) IncrResponseEmpty() { m.responses.With(prometheus.Labels{"verb": "EMPTY"}).Inc() }
+func (m *Metrics) IncrResponsePong()  { m.responses.With(prometheus.Labels{"verb": "PONG"}).Inc() }

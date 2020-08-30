@@ -17,16 +17,23 @@ import (
 	"github.com/husio/masenko/store"
 )
 
-type MetricCounter interface {
-	ClientConnected()
-	ClientDisconnected()
-	TaskPushed()
-	TaskFetched()
-	TaskAcked()
-	TaskNacked()
-	RequestHandled()
-	RequestErrored()
-	State() map[string]int64
+// MetricsCollector is implemeneted by any metric counter backend, for example
+// a set of Prometheus collectors.
+type MetricsCollector interface {
+	IncrClient()
+	DecrClient()
+	IncrFetch()
+	IncrPush()
+	IncrAtomic()
+	IncrAck()
+	IncrNack()
+	IncrPing()
+	IncrInfo()
+	IncrQuit()
+	IncrResponseOK()
+	IncrResponseEmpty()
+	IncrResponseErr()
+	IncrResponsePong()
 }
 
 func HandleClient(
@@ -34,7 +41,7 @@ func HandleClient(
 	c io.ReadWriteCloser,
 	q store.Queue,
 	heartbeat time.Duration,
-	mcounter MetricCounter,
+	metrics MetricsCollector,
 ) {
 	defer c.Close()
 
@@ -46,12 +53,12 @@ func HandleClient(
 		wr:        c,
 		rd:        bufio.NewReader(c),
 		heartbeat: heartbeat,
-		metrics:   mcounter,
+		metrics:   metrics,
 	}
 	h.lastMsg.Time = time.Now()
 
-	h.metrics.ClientConnected()
-	defer h.metrics.ClientDisconnected()
+	h.metrics.IncrClient()
+	defer h.metrics.DecrClient()
 
 	go func() {
 		timeout := time.After(heartbeat)
@@ -93,7 +100,7 @@ type clientHandler struct {
 		sync.Mutex
 		time.Time
 	}
-	metrics MetricCounter
+	metrics MetricsCollector
 }
 
 func (c *clientHandler) handleLoop(ctx context.Context) error {
@@ -152,16 +159,17 @@ func (c *clientHandler) handleLoop(ctx context.Context) error {
 }
 
 func (c *clientHandler) handleQuit(ctx context.Context, payload []byte) error {
+	c.metrics.IncrQuit()
 	return c.write("OK", nil)
 }
 
 func (c *clientHandler) handleInfo(ctx context.Context, payload []byte) error {
+	c.metrics.IncrInfo()
+
 	info := struct {
-		Queues  []store.QueueStat `json:"queues"`
-		Metrics map[string]int64  `json:"metrics"`
+		Queues []store.QueueStat `json:"queues"`
 	}{
-		Queues:  c.queue.Stats(),
-		Metrics: c.metrics.State(),
+		Queues: c.queue.Stats(),
 	}
 	return c.write("OK", info)
 }
@@ -235,12 +243,13 @@ processAtomicRequests:
 		return c.writeErr(fmt.Sprintf("commit transaction: %s", err))
 	}
 
+	c.metrics.IncrAtomic()
 	for _, r := range requests {
 		switch {
 		case bytes.Equal(r.verb, []byte("ACK")):
-			c.metrics.TaskAcked()
+			c.metrics.IncrAck()
 		case bytes.Equal(r.verb, []byte("PUSH")):
-			c.metrics.TaskPushed()
+			c.metrics.IncrPush()
 		}
 	}
 
@@ -274,7 +283,7 @@ func (c *clientHandler) handlePush(ctx context.Context, payload []byte) error {
 		return c.writeErr(fmt.Sprintf("cannot push to queue: %s", err))
 	}
 
-	c.metrics.TaskPushed()
+	c.metrics.IncrPush()
 
 	return c.write("OK", pushResponse{
 		ID: taskID,
@@ -359,7 +368,7 @@ func (c *clientHandler) handleFetch(ctx context.Context, payload []byte) error {
 	switch task, err := c.queue.Pull(ctx, input.Queues); {
 	case err == nil:
 		c.toack = append(c.toack, task.ID)
-		c.metrics.TaskFetched()
+		c.metrics.IncrFetch()
 		return c.write("OK", fetchResponse{
 			ID:       task.ID,
 			Queue:    task.Queue,
@@ -402,7 +411,7 @@ func (c *clientHandler) handleAck(ctx context.Context, payload []byte) error {
 			if err := c.queue.Acknowledge(ctx, taskID, true); err != nil {
 				return c.writeErr(fmt.Sprintf("acknowledge: %s", err))
 			}
-			c.metrics.TaskAcked()
+			c.metrics.IncrAck()
 			return c.write("OK", nil)
 		}
 	}
@@ -441,7 +450,7 @@ func (c *clientHandler) handleNack(ctx context.Context, payload []byte) error {
 			if err := c.queue.Acknowledge(ctx, input.ID, false); err != nil {
 				return c.writeErr(fmt.Sprintf("acknowledge: %s", err))
 			}
-			c.metrics.TaskNacked()
+			c.metrics.IncrNack()
 			return c.write("OK", nil)
 		}
 	}
@@ -479,9 +488,15 @@ func (c *clientHandler) write(verb string, payload interface{}) error {
 		return fmt.Errorf("write to output: %w", err)
 	}
 
-	c.metrics.RequestHandled()
-	if verb == "ERR" {
-		c.metrics.RequestErrored()
+	switch verb {
+	case "OK":
+		c.metrics.IncrResponseOK()
+	case "EMPTY":
+		c.metrics.IncrResponseEmpty()
+	case "PONG":
+		c.metrics.IncrResponsePong()
+	case "ERR":
+		c.metrics.IncrResponseErr()
 	}
 
 	return nil

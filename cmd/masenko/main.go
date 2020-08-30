@@ -30,12 +30,13 @@ func main() {
 	}()
 
 	conf := masenko.ServerConfiguration{
-		StoreDir:   envStr("MASENKO_STORE_DIR", os.TempDir()),
-		MaxWALSize: uint64(envInt("MASENKO_MAX_WAL_SIZE", 25e6)), // Around 25Mb.
-		ListenTCP:  envStr("MASENKO_LISTEN_TCP", "localhost:12345"),
-		ListenHTTP: envStr("MASENKO_LISTEN_HTTP", "localhost:8000"),
-		Heartbeat:  envDur("MASENKO_HEARTBEAT", 45*time.Second),
+		StoreDir:         envStr("MASENKO_STORE_DIR", os.TempDir()),
+		MaxWALSize:       uint64(envInt("MASENKO_MAX_WAL_SIZE", 25e6)), // Around 25Mb.
+		ListenTCP:        envStr("MASENKO_LISTEN_TCP", ":12345"),
+		ListenPrometheus: envStr("MASENKO_LISTEN_PROMETHEUS", ":1221"),
+		Heartbeat:        envDur("MASENKO_HEARTBEAT", 45*time.Second),
 	}
+
 	server, err := masenko.StartServer(ctx, conf)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

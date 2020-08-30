@@ -5,9 +5,6 @@ all: help
 build-%:
 	CGO_ENABLED=0 go build -o bin/${*} -ldflags "-X main.GitCommit=$(VERSION)" github.com/husio/masenko/cmd/${*}
 
-inlineasset:
-	CGO_ENABLED=0 go install github.com/husio/masenko/cmd/inlineasset
-
 dockerize:
 	docker build -t "masenko:${VERSION}" -t "masenko:latest" .
 
@@ -20,9 +17,13 @@ test-go:
 test-python: build-masenko
 	. .venv/bin/activate; cd clients/python; python -m unittest
 
-run-dev: inlineasset
+run-dev:
 	@# https://github.com/cespare/reflex
-	reflex -G '.*' -G 'masenko/webui/asset_*' -G 'clients/*' -s -- sh -c 'go generate ./... && go run github.com/husio/masenko/cmd/masenko'
+	reflex -G '.*' -G '*.yml' -G 'clients/*' -s -- sh -c 'go generate ./... && go run github.com/husio/masenko/cmd/masenko'
+
+prometheus-server:
+	docker run --rm -it --network host -v $(PWD)/etc/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+
 
 help:
 	@echo

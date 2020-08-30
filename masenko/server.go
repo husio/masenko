@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/husio/masenko/masenko/proto"
-	"github.com/husio/masenko/masenko/webui"
 	"github.com/husio/masenko/store"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type ServerConfiguration struct {
@@ -22,16 +23,21 @@ type ServerConfiguration struct {
 	// MaxWalSize is the maximum allowed WAL file size in bytes. Once
 	// reached a cleanup process that creates a fresh WAL file is started.
 	// Setting this value to 0 disables this functionality.
-	MaxWALSize uint64
-	ListenTCP  string
-	ListenHTTP string
-	Heartbeat  time.Duration
+	MaxWALSize       uint64
+	ListenTCP        string
+	ListenPrometheus string
+	Heartbeat        time.Duration
 }
 
 func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	mcounter := NewMetricsCounter()
+	promreg := prometheus.NewRegistry()
+	metrics, err := NewMetrics(promreg)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("metrics: %w", err)
+	}
 
 	logger := log.New(os.Stdout, "masenko: ", log.LUTC)
 
@@ -48,18 +54,20 @@ func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error)
 		return nil, fmt.Errorf("client interface: %w", err)
 	}
 
-	webui := &http.Server{
-		BaseContext:    func(net.Listener) context.Context { return ctx },
-		Addr:           conf.ListenHTTP,
-		Handler:        webui.NewWebUI(queue, mcounter),
-		ReadTimeout:    time.Second,
-		WriteTimeout:   time.Second,
-		MaxHeaderBytes: 1e5,
+	prom := &http.Server{
+		BaseContext: func(net.Listener) context.Context { return ctx },
+		Addr:        conf.ListenPrometheus,
+		Handler: promhttp.HandlerFor(promreg, promhttp.HandlerOpts{
+			ErrorLog:          logger,
+			EnableOpenMetrics: true,
+		}),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 
 	s := server{
 		queue: queue,
-		webui: webui,
+		prom:  prom,
 		cliui: ln,
 		errc:  make(chan error, 1),
 		stop:  cancel,
@@ -68,7 +76,7 @@ func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		if err := webui.ListenAndServe(); err != nil {
+		if err := prom.ListenAndServe(); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
 				return
 			}
@@ -98,7 +106,7 @@ func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error)
 				}
 				return
 			}
-			go proto.HandleClient(ctx, cli, queue, conf.Heartbeat, mcounter)
+			go proto.HandleClient(ctx, cli, queue, conf.Heartbeat, metrics)
 		}
 	}()
 
@@ -106,7 +114,7 @@ func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error)
 	go func() {
 		defer s.wg.Done()
 		<-ctx.Done()
-		s.webui.Shutdown(context.Background())
+		s.prom.Shutdown(context.Background())
 		s.cliui.Close()
 	}()
 
@@ -115,7 +123,7 @@ func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error)
 
 type server struct {
 	queue store.Queue
-	webui *http.Server
+	prom  *http.Server
 	cliui net.Listener
 
 	wg   sync.WaitGroup
