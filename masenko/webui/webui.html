@@ -5,13 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="/js/mithril.js"></script>
-<style>
-html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
-#app .row { display: flex; width: 100%; justify-content: space-around; }
-#app .graph { border: 1px solid #DCDCDC; width: 200px; height: 80px; display: flex;}
-#app .graph .bar { display: flex; width: 100%; max-width: 10px; margin: 0; padding: 0; align-self: flex-end; align-items: center; flex-direction: row; }
-#app .graph .bar:hover { background: black !important; }
-</style>
+  <link rel="stylesheet" href="/css/webui.css" tyle="text/css">
 </head>
 <body>
   <div id="app"></div>
@@ -68,28 +62,20 @@ var App = {
   oninit: Stats.loadQueues,
   view: function() {
     return [
-      renderQueueListView(Stats.queues()),
       renderMetrics(Stats.metrics()),
+      renderQueueListView(Stats.queues()),
     ]
   }
 }
 
 
 function renderMetrics(metrics) {
-  return m("table", [
-    m("thead",
-      m("tr", [
-        m("th", "Name"),
-        m("th", "Value"),
-      ])
-    ),
-    metrics.map(function(metric) {
-      return m("tr", [
-        m("td", metric.name),
-        m("td", metric.value),
-      ])
-    }),
-  ])
+  return m("div", {className: "global-metrics"}, metrics.map(function (metric) {
+    return m("div", {className: "global-metric"}, [
+      m("div", {className: "item name"}, metric.name),
+      m("div", {className: "item value"}, metric.value)
+    ])
+  }))
 }
 
 

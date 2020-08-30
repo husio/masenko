@@ -3,6 +3,7 @@ import time
 import collections
 import multiprocessing
 import argparse
+import random
 
 from typing import List
 
@@ -27,7 +28,10 @@ def main():
 
 def run(batch_size: int):
     with client.connect("localhost", 12345) as c:
-        queue_name = "pyq"
+        queue_name = random.choice([
+            "default", "highprio", "lowprio", "email", "sysalert", "bacground", "service.bob",
+            "service.alice", "service.charlie", "service.danny", "invoices", "monitoring",
+        ])
         to_ack: List[int] = []
 
         while True:

@@ -22,7 +22,7 @@ test-python: build-masenko
 
 run-dev: inlineasset
 	@# https://github.com/cespare/reflex
-	reflex -G '.*' -G 'masenko/webui/asset_*' -s -- sh -c 'go generate ./... && go run github.com/husio/masenko/cmd/masenko'
+	reflex -G '.*' -G 'masenko/webui/asset_*' -G 'clients/*' -s -- sh -c 'go generate ./... && go run github.com/husio/masenko/cmd/masenko'
 
 help:
 	@echo

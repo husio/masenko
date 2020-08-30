@@ -1,4 +1,4 @@
-// File generated with inlineasset 2020-08-02 05:46:36.734752926 +0000 UTC.
+// File generated with inlineasset 2020-08-30 10:50:45.578360763 +0000 UTC.
 package webui
 
 import "encoding/base64"

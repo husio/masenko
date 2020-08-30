@@ -1,0 +1,67 @@
+html, body { 
+  background: #ccc;
+  margin: 3em auto; 
+  padding: 0; 
+  height: 100%; 
+  width: 100%;
+  max-width: 80em;
+  min-width: 400px;
+}
+#app { 
+  background: #fff; 
+  padding: 3em;
+}
+#app .row { 
+  display: flex; 
+  width: 100%; 
+  justify-content: space-around;
+}
+#app .graph { 
+  border: 1px solid #DCDCDC;
+  width: 200px; 
+  height: 80px; 
+  display: flex;
+}
+#app .graph .bar { 
+  display: flex;
+  width: 100%;
+  max-width: 10px;
+  margin: 0;
+  padding: 0;
+  align-self: flex-end;
+  align-items: center;
+  flex-direction: row;
+}
+#app .graph .bar:hover { 
+  background: black !important;
+}
+#app .global-metrics {
+  display: flex;
+  justify-content: space-evenly;
+  flex-wrap: wrap;
+  margin-bottom: 2em;
+}
+
+#app .global-metrics .global-metric {
+  flex-direction: row;
+  flex-wrap: wrap;
+  min-width: 6em;
+  border: 1px solid #DCDCDC;
+  border-radius: 5px;
+  text-align: right;
+  margin: 10px 4px;
+}
+
+#app .global-metrics .global-metric .item {
+  display: inline-flex;
+  flex-direction: row;
+  padding: 0.2em;
+}
+#app .global-metrics .global-metric .item.name {
+  background: #D0D0D0;
+  padding: 1em;
+  border-radius: 5px 0 0 5px;
+}
+#app .global-metrics .global-metric .item.value {
+  padding: 0.8em
+}
