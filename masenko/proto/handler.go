@@ -208,6 +208,7 @@ func (c *clientHandler) handleAtomic(ctx context.Context, _ []byte) error {
 	// Remove all IDs only if all operations succeedded.
 	var acked []uint32
 
+	var pushed []uint32
 processAtomicRequests:
 	for i, r := range requests {
 		switch {
@@ -227,12 +228,37 @@ processAtomicRequests:
 			}
 			return c.writeErr(fmt.Sprintf("task %d not acquired", taskID))
 		case bytes.Equal(r.verb, []byte("PUSH")):
-			task, err := parsePushRequest(r.payload)
+			req, err := parsePushRequest(r.payload)
 			if err != nil {
 				return c.writeErr(fmt.Sprintf("message %d: PUSH: %s", i, err))
 			}
-			if _, err := tx.Push(ctx, *task); err != nil {
+
+			var blockedBy []uint32
+			for _, n := range req.BlockedBy {
+				if n > 0 {
+					blockedBy = append(blockedBy, uint32(n))
+				} else {
+					pos := int(n * -1)
+					if pos == 0 || pos > len(pushed) {
+						return c.writeErr(fmt.Sprintf("message %d: PUSH: invalid task position in blocked by", i))
+					}
+					blockedBy = append(blockedBy, pushed[len(pushed)-pos-1])
+				}
+			}
+
+			task := store.Task{
+				Name:      req.Name,
+				Queue:     req.Queue,
+				Deadqueue: req.Deadqueue,
+				Payload:   req.Payload,
+				Retry:     req.Retry,
+				ExecuteAt: req.ExecuteAt,
+				BlockedBy: blockedBy,
+			}
+			if id, err := tx.Push(ctx, task); err != nil {
 				return c.writeErr(fmt.Sprintf("message %d: PUSH: %s", i, err))
+			} else {
+				pushed = append(pushed, id)
 			}
 		default:
 			return c.writeErr(fmt.Sprintf("%s is not allowed in transaction.", string(r.verb)))
@@ -264,7 +290,11 @@ processAtomicRequests:
 		}
 	}
 
-	return c.write("OK", nil)
+	return c.write("OK", atomicResponse{IDs: pushed})
+}
+
+type atomicResponse struct {
+	IDs []uint32 `json:"ids,omitempty"`
 }
 
 type request struct {
@@ -273,12 +303,27 @@ type request struct {
 }
 
 func (c *clientHandler) handlePush(ctx context.Context, payload []byte) error {
-	task, err := parsePushRequest(payload)
+	req, err := parsePushRequest(payload)
 	if err != nil {
 		return c.writeErr(err.Error())
 	}
-
-	taskID, err := c.queue.Push(ctx, *task)
+	var blockedBy []uint32
+	for _, n := range req.BlockedBy {
+		if n <= 0 {
+			return c.writeErr("cannot use relative blocked by outside of a transaction")
+		}
+		blockedBy = append(blockedBy, uint32(n))
+	}
+	task := store.Task{
+		Name:      req.Name,
+		Queue:     req.Queue,
+		Deadqueue: req.Deadqueue,
+		Payload:   req.Payload,
+		Retry:     req.Retry,
+		ExecuteAt: req.ExecuteAt,
+		BlockedBy: blockedBy,
+	}
+	taskID, err := c.queue.Push(ctx, task)
 	if err != nil {
 		return c.writeErr(fmt.Sprintf("cannot push to queue: %s", err))
 	}
@@ -290,7 +335,7 @@ func (c *clientHandler) handlePush(ctx context.Context, payload []byte) error {
 	})
 }
 
-func parsePushRequest(payload []byte) (*store.Task, error) {
+func parsePushRequest(payload []byte) (*pushRequest, error) {
 	input := pushRequest{
 		Queue: "default",
 		Retry: 20,
@@ -312,16 +357,10 @@ func parsePushRequest(payload []byte) (*store.Task, error) {
 		t := input.ExecuteAt.Truncate(time.Second).UTC()
 		input.ExecuteAt = &t
 	}
-
-	task := store.Task{
-		Queue:     input.Queue,
-		Name:      input.Name,
-		Deadqueue: input.Deadqueue,
-		Payload:   input.Payload,
-		Retry:     input.Retry,
-		ExecuteAt: input.ExecuteAt,
+	if len(input.BlockedBy) > 255 {
+		return nil, errors.New("at most 255 blocked by task IDs can be provided")
 	}
-	return &task, nil
+	return &input, nil
 }
 
 type pushRequest struct {
@@ -331,6 +370,7 @@ type pushRequest struct {
 	Payload   json.RawMessage `json:"payload"`
 	Retry     uint8           `json:"retry"`
 	ExecuteAt *time.Time      `json:"execute_at,omitempty"`
+	BlockedBy []int64         `json:"blocked_by,omitempty"`
 }
 
 type pushResponse struct {

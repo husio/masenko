@@ -23,6 +23,7 @@ func TestOpReadWrite(t *testing.T) {
 				Deadqueue: "a-deadqueue",
 				ExecuteAt: &now,
 				Retry:     2,
+				BlockedBy: []uint32{1942942492, 42, 924},
 			},
 		},
 		{
@@ -131,26 +132,39 @@ func BenchmarkOperationSerialization(b *testing.B) {
 }
 
 func TestSerializeDeserializeAdd(t *testing.T) {
-	op := OpAdd{
-		ID:        1097859,
-		Queue:     "a-queue",
-		Name:      "a-name",
-		Payload:   []byte("qwertyuiop0987654321"),
-		Deadqueue: "a-deadqueue",
-		Retry:     6,
+	cases := map[string]OpAdd{
+		"only mandatory fields": {
+			ID:    194129,
+			Queue: "a-queue",
+			Name:  "a-name",
+		},
+		"fully populated": {
+			ID:        1097859,
+			Queue:     "a-queue",
+			Name:      "a-name",
+			Payload:   []byte("qwertyuiop0987654321"),
+			Deadqueue: "a-deadqueue",
+			Retry:     6,
+			BlockedBy: []uint32{292941, 122813883},
+		},
 	}
-	b := make([]byte, 1e5)
-	n, err := op.Serialize(b)
-	if err != nil {
-		t.Fatalf("serialize: %s", err)
-	}
-	b = b[:n]
-	var cpy OpAdd
-	cpy.Deserialize(b)
-	if !reflect.DeepEqual(cpy, op) {
-		t.Logf("want %+v", op)
-		t.Logf("copy %+v", cpy)
-		t.Fatal("data corruption")
+
+	for testName, op := range cases {
+		t.Run(testName, func(t *testing.T) {
+			b := make([]byte, 1e5)
+			n, err := op.Serialize(b)
+			if err != nil {
+				t.Fatalf("serialize: %s", err)
+			}
+			b = b[:n]
+			var cpy OpAdd
+			cpy.Deserialize(b)
+			if !reflect.DeepEqual(cpy, op) {
+				t.Logf("want %+v", op)
+				t.Logf("copy %+v", cpy)
+				t.Fatal("data corruption")
+			}
+		})
 	}
 }
 

@@ -124,6 +124,12 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 					m.nextTaskID = op.ID + 1
 				}
 				byid[op.ID] = task
+				for _, id := range task.BlockedBy {
+					if other, ok := byid[id]; ok {
+						other.blocking = append(other.blocking, task)
+						task.blockedBy = append(task.blockedBy, other)
+					}
+				}
 			case *wal.OpFail:
 				task, ok := byid[op.ID]
 				if !ok {
@@ -165,6 +171,13 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 					return fmt.Errorf("missing task %d", op.ID)
 				}
 				delete(byid, op.ID)
+
+				for _, t := range task.blocking {
+					t.blockedBy = deleteTaskRef(t.blockedBy, task)
+					if len(t.blockedBy) == 0 {
+						m.namedQueue(t.Queue).pushTask(t)
+					}
+				}
 			default:
 				return fmt.Errorf("unknown WAL operation kind: %T", op)
 			}
@@ -271,6 +284,18 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	for _, id := range task.BlockedBy {
+		if id >= m.nextTaskID {
+			return 0, fmt.Errorf("task %d is not yet created", id)
+		}
+		// If a task cannot be found then it must have been processed
+		// and we can ignore it.
+		if t, ok := m.taskByID(id); ok {
+			t.blocking = append(t.blocking, &task)
+			task.blockedBy = append(task.blockedBy, t)
+		}
+	}
+
 	task.ID = m.genTaskID()
 	if n, err := m.walWr.Append(taskToOpAdd(&task)); err != nil {
 		return 0, fmt.Errorf("wall append: %w", err)
@@ -280,6 +305,36 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 
 	m.namedQueue(task.Queue).pushTask(&task)
 	return task.ID, nil
+}
+
+// taskByID returns the task with given ID. This is an extremply unperformant
+// lookup algorithm.
+func (m *MemStore) taskByID(id uint32) (*Task, bool) {
+	for _, queue := range m.queues {
+		for e := queue.ready.Front(); e != nil; e = e.Next() {
+			t := e.Value.(*Task)
+			if t.ID == id {
+				return t, true
+			}
+			for _, bt := range t.blocking {
+				if bt.ID == id {
+					return bt, true
+				}
+			}
+		}
+		for e := queue.delayed.Front(); e != nil; e = e.Next() {
+			t := e.Value.(*Task)
+			if t.ID == id {
+				return t, true
+			}
+			for _, bt := range t.blocking {
+				if bt.ID == id {
+					return bt, true
+				}
+			}
+		}
+	}
+	return nil, false
 }
 
 func (m *MemStore) walVacuum() {
@@ -356,6 +411,12 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 				go m.walVacuum()
 			}
 
+			for _, t := range task.blocking {
+				t.blockedBy = deleteTaskRef(t.blockedBy, task)
+				if len(t.blockedBy) == 0 {
+					m.namedQueue(t.Queue).pushTask(t)
+				}
+			}
 			return nil
 		}
 
@@ -398,7 +459,8 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			return nil
 		}
 
-		deadTask := Task{
+		deadTasks := make([]*Task, 0, 4)
+		deadTasks = append(deadTasks, &Task{
 			ID:        task.ID, // The same ID because this is the same task.
 			Queue:     task.Deadqueue,
 			Name:      task.Name,
@@ -407,20 +469,81 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			ExecuteAt: nil,
 			Retry:     task.Retry,
 			Failures:  0,
-		}
+			BlockedBy: task.BlockedBy,
+			// Blocking functionality is not active in the dead
+			// letter queue.
+			blockedBy: nil,
+			blocking:  nil,
+		})
 		batch := []wal.Operation{
 			&wal.OpDelete{ID: task.ID},
-			taskToOpAdd(&deadTask),
+			taskToOpAdd(deadTasks[0]),
 		}
+
+		// If this task was blocking any other task execution, fail
+		// dependencies as well. Because this task will never succeed,
+		// all tasks that are blocked by this one will never be
+		// executed.
+		// Dependencies can have dependencies.
+		for _, t := range allBlocked(task, nil) {
+			var op wal.Operation
+			if t.Deadqueue == "" {
+				op = &wal.OpDelete{ID: t.ID}
+			} else {
+				dead := &Task{
+					ID:        t.ID,
+					Queue:     t.Deadqueue,
+					Name:      t.Name,
+					Payload:   t.Payload,
+					Deadqueue: "",
+					ExecuteAt: nil,
+					Retry:     t.Retry,
+					Failures:  0,
+					BlockedBy: t.BlockedBy,
+					// Blocking functionality is not active
+					// in the dead letter queue.
+					blockedBy: nil,
+					blocking:  nil,
+				}
+				op = taskToOpAdd(dead)
+				deadTasks = append(deadTasks, dead)
+			}
+			batch = append(batch, op)
+		}
+
 		if n, err := m.walWr.Append(batch...); err != nil {
 			return fmt.Errorf("wal append: %w", err)
 		} else {
 			m.walSize += uint64(n)
 		}
-		m.namedQueue(task.Deadqueue).pushTask(&deadTask)
+		for _, dead := range deadTasks {
+			m.namedQueue(dead.Queue).pushTask(dead)
+		}
 		return nil
 	}
 	return ErrNotFound
+}
+
+// allBlocking appends to given slice all tasks that are directly and indirectly blocked by given task.
+func allBlocked(root *Task, all []*Task) []*Task {
+	for _, t := range root.blocking {
+		all = append(all, t)
+		all = allBlocked(t, all)
+	}
+	return all
+}
+
+// deleteTaskRef modifies given list of refenreces.
+func deleteTaskRef(references []*Task, t *Task) []*Task {
+	for i, ref := range references {
+		if ref != t {
+			continue
+		}
+		references[i] = references[len(references)-1]
+		references[len(references)-1] = nil
+		return references[:len(references)-1]
+	}
+	return references
 }
 
 func (m *MemStore) genTaskID() uint32 {
@@ -656,6 +779,13 @@ func (tq *namedQueue) popTask(now time.Time) (*Task, bool) {
 
 // pushTask adds task to this queue.
 func (tq *namedQueue) pushTask(t *Task) {
+	if len(t.blockedBy) > 0 {
+		// Blocked tasks are not queued. Instead they are referenced by
+		// the tasks that block them and pushed to a queue once the
+		// last blocking task is processed.
+		return
+	}
+
 	if t.ExecuteAt == nil {
 		tq.ready.PushBack(t)
 		return

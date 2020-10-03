@@ -1,0 +1,47 @@
+client-a send PUSH {"name": "first"}
+client-a recv OK {"id":1}
+
+client-a send PUSH {"name": "second", "blocked_by":[1]}
+client-a recv OK {"id":2}
+
+client-a send PUSH {"name": "third", "blocked_by":[1,2]}
+client-a recv OK {"id":3}
+
+client-a send PUSH {"name": "fourth"}
+client-a recv OK {"id":4}
+
+client-a send FETCH
+client-a recv OK {"id":1,"queue":"default","name":"first"}
+
+client-a send FETCH
+client-a recv OK {"id":4,"queue":"default","name":"fourth"}
+
+# Nothing to fetch because all other tasks are blocked.
+client-a send FETCH
+client-a recv EMPTY {}
+
+client-a send ACK {"id": 1}
+client-a recv OK {}
+
+client-a send ACK {"id": 4}
+client-a recv OK {}
+
+client-a send FETCH
+client-a recv OK {"id":2,"queue":"default","name":"second"}
+
+# Nothing to fetch because all other tasks are blocked.
+client-a send FETCH
+client-a recv EMPTY {}
+
+client-a send ACK {"id": 2}
+client-a recv OK {}
+
+client-a send FETCH
+client-a recv OK {"id":3,"queue":"default","name":"third"}
+
+client-a send ACK {"id": 3}
+client-a recv OK {}
+
+# No tasks left.
+client-a send FETCH
+client-a recv EMPTY {}

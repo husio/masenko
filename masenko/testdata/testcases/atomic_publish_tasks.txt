@@ -3,7 +3,7 @@ client-a send PUSH {"name": "first"}
 client-a send PUSH {"name": "second"}
 client-a send PUSH {"name": "third"}
 client-a send DONE
-client-a recv OK {}
+client-a recv OK {"ids":[1,2,3]}
 
 client-a send INFO
 client-a recv OK {"queues":[{"name":"default","ready":3,"delayed":0,"to_ack":0}]}
