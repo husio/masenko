@@ -5,13 +5,13 @@ client-a send FETCH
 client-a recv OK {"id":1,"queue":"default","name":"first"}
 
 client-a send INFO
-client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":1}],"metrics":{"ack":0,"clients":1,"fetch":1,"nack":0,"push":1,"request":2,"request-error":0}}
+client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":1}]}
 
 client-a send ACK {"id": 1}
 client-a recv OK {}
 
 client-a send INFO
-client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":0}],"metrics":{"ack":1,"clients":1,"fetch":1,"nack":0,"push":1,"request":4,"request-error":0}}
+client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":0}]}
 
 client-a send QUIT
 client-a recv OK {}

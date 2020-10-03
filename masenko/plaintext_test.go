@@ -67,10 +67,10 @@ func TestPlainTextCases(t *testing.T) {
 			defer fd.Close()
 
 			server, err := StartServer(ctx, ServerConfiguration{
-				StoreDir:   tempdir(t),
-				ListenTCP:  "localhost:12001",
-				ListenHTTP: "localhost:12002",
-				Heartbeat:  3 * time.Second,
+				StoreDir:         tempdir(t),
+				ListenTCP:        "localhost:12001",
+				ListenPrometheus: "localhost:12002",
+				Heartbeat:        3 * time.Second,
 			})
 			if err != nil {
 				t.Fatalf("start server: %s", err)

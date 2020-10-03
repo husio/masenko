@@ -6,7 +6,7 @@ client-a send DONE
 client-a recv OK {}
 
 client-a send INFO
-client-a recv OK {"queues":[{"name":"default","ready":3,"delayed":0,"to_ack":0}],"metrics":{"ack":0,"clients":1,"fetch":0,"nack":0,"push":3,"request":1,"request-error":0}}
+client-a recv OK {"queues":[{"name":"default","ready":3,"delayed":0,"to_ack":0}]}
 
 client-a send FETCH
 client-a recv OK {"id":1,"queue":"default","name":"first"}
@@ -27,7 +27,7 @@ client-a send DONE
 client-a recv ERR {"msg":"XXX is not allowed in transaction."}
 
 client-a send INFO
-client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":3}],"metrics":{"ack":0,"clients":1,"fetch":3,"nack":0,"push":3,"request":6,"request-error":1}}
+client-a recv OK {"queues":[{"name":"default","ready":0,"delayed":0,"to_ack":3}]}
 
 client-a send QUIT
 client-a recv OK {}

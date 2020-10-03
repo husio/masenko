@@ -312,11 +312,11 @@ func RunServer(ctx context.Context, t testing.TB) string {
 	t.Helper()
 
 	conf := masenko.ServerConfiguration{
-		Heartbeat:  5 * time.Second,
-		MaxWALSize: 1e8,
-		StoreDir:   tempdir(t),
-		ListenTCP:  "localhost:13456",
-		ListenHTTP: "localhost:13457",
+		Heartbeat:        5 * time.Second,
+		MaxWALSize:       1e8,
+		StoreDir:         tempdir(t),
+		ListenTCP:        "localhost:13456",
+		ListenPrometheus: "localhost:12002",
 	}
 	server, err := masenko.StartServer(ctx, conf)
 	if err != nil {
