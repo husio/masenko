@@ -297,17 +297,20 @@ func (op *OpDelete) Deserialize(b []byte) error {
 }
 
 type OpFail struct {
-	ID uint32
+	ID        uint32
+	ExecuteAt time.Time
 }
 
 func (op OpFail) Serialize(b []byte) (int, error) {
-	const size = 5
+	const size = 1 + 4 + 4
 	if len(b) < size {
 		return 0, fmt.Errorf("buffer too small: %w", ErrSize)
 	}
 	b[0] = opKindFail
 	b = b[1:]
 	enc.PutUint32(b, op.ID)
+	b = b[4:]
+	enc.PutUint32(b, uint32(op.ExecuteAt.Unix()))
 	return size, nil
 
 }
@@ -316,10 +319,11 @@ func (op *OpFail) Deserialize(b []byte) error {
 	if kind := OperationKind(b[0]); kind != opKindFail {
 		return fmt.Errorf("invalid kind %d: %w", kind, ErrInput)
 	}
-	if len(b) < 5 {
+	if len(b) < 9 {
 		return fmt.Errorf("buffer too small: %w", ErrSize)
 	}
 	op.ID = enc.Uint32(b[1:])
+	op.ExecuteAt = time.Unix(int64(enc.Uint32(b[5:])), 0).UTC()
 	return nil
 }
 

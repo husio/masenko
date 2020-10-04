@@ -91,12 +91,26 @@ func TestOpenStore(t *testing.T) {
 		},
 		"a blocking task failed": {
 			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
-				id, err := s.Push(ctx, Task{Name: "first", Queue: "default"})
+				id, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 0})
 				if err != nil {
 					t.Fatalf("cannot push first task: %s", err)
 				}
 				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{id}}); err != nil {
 					t.Fatalf("cannot push second task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if task.Name != "first" {
+					t.Fatalf("wanted first task, got %+v", task)
+				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"a task failed once": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				if _, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 10}); err != nil {
+					t.Fatalf("cannot push first task: %s", err)
 				}
 				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
 					t.Fatalf("cannot pull a task: %s", err)

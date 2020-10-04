@@ -136,6 +136,29 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 					return fmt.Errorf("cannot delete missing task %d", op.ID)
 				}
 				task.Failures++
+				task.ExecuteAt = &op.ExecuteAt
+
+				queue := m.namedQueue(task.Queue)
+				if task.Failures == 1 {
+					for e := queue.ready.Front(); e != nil; e = e.Next() {
+						t := e.Value.(*Task)
+						if t.ID != op.ID {
+							continue
+						}
+						queue.ready.Remove(e)
+						break
+					}
+				} else {
+					for e := queue.delayed.Front(); e != nil; e = e.Next() {
+						t := e.Value.(*Task)
+						if t.ID != op.ID {
+							continue
+						}
+						queue.delayed.Remove(e)
+						break
+					}
+				}
+				m.namedQueue(task.Queue).pushTask(task) // Requeue delayed.
 			case *wal.OpDelete:
 				task, ok := byid[op.ID]
 				if !ok {
@@ -169,7 +192,18 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 				}
 				delete(byid, op.ID)
 
-				// TODO if the task succeded, unblock the blocked task.
+				// Unblock all blocked tasks. It does not
+				// matter if this task succeeded or failed. If
+				// the original task was deleted because it
+				// failed, a delete wal event will follow for
+				// all blocked tasks.
+				for _, t := range allBlocked(task, nil) {
+					t.blockedBy = deleteTaskRef(t.blockedBy, task)
+					if len(t.blockedBy) == 0 {
+						m.namedQueue(t.Queue).pushTask(t)
+					}
+				}
+
 			default:
 				return fmt.Errorf("unknown WAL operation kind: %T", op)
 			}
@@ -432,11 +466,11 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			//       fmt.Printf("failures=%d  delay=%s\n", i, delay)
 			//   }
 			delay := time.Duration(math.Pow(float64(task.Failures), 4)) * time.Second
-			executeAt := m.now().Add(delay)
+			executeAt := m.now().Add(delay).Truncate(time.Second)
 
 			task.ExecuteAt = &executeAt
 			m.namedQueue(task.Queue).pushTask(task)
-			if n, err := m.walWr.Append(&wal.OpFail{ID: task.ID}); err != nil {
+			if n, err := m.walWr.Append(&wal.OpFail{ID: task.ID, ExecuteAt: executeAt}); err != nil {
 				return fmt.Errorf("wal append: %w", err)
 			} else {
 				m.walSize += uint64(n)
@@ -444,20 +478,14 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			return nil
 		}
 
-		if task.Deadqueue == "" {
-			if n, err := m.walWr.Append(&wal.OpDelete{ID: task.ID}); err != nil {
-				return fmt.Errorf("wal append: %w", err)
-			} else {
-				m.walSize += uint64(n)
-			}
-			return nil
-		}
-
-		deadTasks := make([]*Task, 0, 4)
-		deadTasks = append(deadTasks, taskToDeadTask(task))
 		batch := []wal.Operation{
 			&wal.OpDelete{ID: task.ID},
-			taskToOpAdd(deadTasks[0]),
+		}
+		deadTasks := make([]*Task, 0, 4)
+
+		if task.Deadqueue != "" {
+			deadTasks = append(deadTasks, taskToDeadTask(task))
+			batch = append(batch, taskToOpAdd(deadTasks[0]))
 		}
 
 		// If this task was blocking any other task execution, fail
@@ -466,7 +494,21 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		// executed.
 		// Dependencies can have dependencies.
 		for _, t := range allBlocked(task, nil) {
+			q := m.namedQueue(t.Queue)
+			// Remove the task from the queue that it is registered
+			// with.
+			queueList := q.ready
+			if t.ExecuteAt != nil {
+				queueList = q.delayed
+			}
+			for el := queueList.Front(); el != nil; el = el.Next() {
+				if el.Value.(*Task).ID == t.ID {
+					queueList.Remove(el)
+					break
+				}
+			}
 			batch = append(batch, &wal.OpDelete{ID: t.ID})
+
 			if t.Deadqueue != "" {
 				dead := taskToDeadTask(t)
 				batch = append(batch, taskToOpAdd(dead))
@@ -549,7 +591,7 @@ func (m *MemStore) rebuildWAL() error {
 		ops := ops[:1]
 		ops[0] = taskToOpAdd(t)
 		for i := uint8(0); i < t.Failures; i++ {
-			ops = append(ops, &wal.OpFail{ID: t.ID})
+			ops = append(ops, &wal.OpFail{ID: t.ID, ExecuteAt: *t.ExecuteAt})
 		}
 
 		if n, err := newWal.Append(ops...); err != nil {

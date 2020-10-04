@@ -49,7 +49,8 @@ func TestOpReadWrite(t *testing.T) {
 				ID: 123,
 			},
 			&OpFail{
-				ID: 124,
+				ID:        124,
+				ExecuteAt: now,
 			},
 		},
 	}
@@ -189,7 +190,8 @@ func TestSerializeDeserializeDelete(t *testing.T) {
 
 func TestSerializeDeserializeFail(t *testing.T) {
 	op := OpFail{
-		ID: 1097859,
+		ID:        1097859,
+		ExecuteAt: time.Now().Truncate(time.Second).UTC(),
 	}
 	b := make([]byte, 1e5)
 	n, err := op.Serialize(b)
