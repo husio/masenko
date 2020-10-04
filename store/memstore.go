@@ -119,17 +119,17 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 			switch op := op.(type) {
 			case *wal.OpAdd:
 				task := opAddToTask(op)
-				m.namedQueue(op.Queue).pushTask(task)
-				if op.ID >= m.nextTaskID {
-					m.nextTaskID = op.ID + 1
-				}
-				byid[op.ID] = task
 				for _, id := range task.BlockedBy {
 					if other, ok := byid[id]; ok {
 						other.blocking = append(other.blocking, task)
 						task.blockedBy = append(task.blockedBy, other)
 					}
 				}
+				if op.ID >= m.nextTaskID {
+					m.nextTaskID = op.ID + 1
+				}
+				m.namedQueue(op.Queue).pushTask(task)
+				byid[op.ID] = task
 			case *wal.OpFail:
 				task, ok := byid[op.ID]
 				if !ok {
@@ -150,9 +150,6 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 						continue
 					}
 					queue.ready.Remove(e)
-					if queue.Empty() {
-						m.deleteMasenko(task.Queue)
-					}
 					deleted = true
 					break
 				}
@@ -172,12 +169,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 				}
 				delete(byid, op.ID)
 
-				for _, t := range task.blocking {
-					t.blockedBy = deleteTaskRef(t.blockedBy, task)
-					if len(t.blockedBy) == 0 {
-						m.namedQueue(t.Queue).pushTask(t)
-					}
-				}
+				// TODO if the task succeded, unblock the blocked task.
 			default:
 				return fmt.Errorf("unknown WAL operation kind: %T", op)
 			}
@@ -462,21 +454,7 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		}
 
 		deadTasks := make([]*Task, 0, 4)
-		deadTasks = append(deadTasks, &Task{
-			ID:        task.ID, // The same ID because this is the same task.
-			Queue:     task.Deadqueue,
-			Name:      task.Name,
-			Payload:   task.Payload,
-			Deadqueue: "",
-			ExecuteAt: nil,
-			Retry:     task.Retry,
-			Failures:  0,
-			BlockedBy: task.BlockedBy,
-			// Blocking functionality is not active in the dead
-			// letter queue.
-			blockedBy: nil,
-			blocking:  nil,
-		})
+		deadTasks = append(deadTasks, taskToDeadTask(task))
 		batch := []wal.Operation{
 			&wal.OpDelete{ID: task.ID},
 			taskToOpAdd(deadTasks[0]),
@@ -488,29 +466,12 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		// executed.
 		// Dependencies can have dependencies.
 		for _, t := range allBlocked(task, nil) {
-			var op wal.Operation
-			if t.Deadqueue == "" {
-				op = &wal.OpDelete{ID: t.ID}
-			} else {
-				dead := &Task{
-					ID:        t.ID,
-					Queue:     t.Deadqueue,
-					Name:      t.Name,
-					Payload:   t.Payload,
-					Deadqueue: "",
-					ExecuteAt: nil,
-					Retry:     t.Retry,
-					Failures:  0,
-					BlockedBy: t.BlockedBy,
-					// Blocking functionality is not active
-					// in the dead letter queue.
-					blockedBy: nil,
-					blocking:  nil,
-				}
-				op = taskToOpAdd(dead)
+			batch = append(batch, &wal.OpDelete{ID: t.ID})
+			if t.Deadqueue != "" {
+				dead := taskToDeadTask(t)
+				batch = append(batch, taskToOpAdd(dead))
 				deadTasks = append(deadTasks, dead)
 			}
-			batch = append(batch, op)
 		}
 
 		if n, err := m.walWr.Append(batch...); err != nil {
@@ -838,6 +799,7 @@ func taskToOpAdd(task *Task) wal.Operation {
 		Deadqueue: task.Deadqueue,
 		ExecuteAt: task.ExecuteAt,
 		Retry:     task.Retry,
+		BlockedBy: task.BlockedBy,
 	}
 }
 
@@ -851,5 +813,24 @@ func opAddToTask(op *wal.OpAdd) *Task {
 		ExecuteAt: op.ExecuteAt,
 		Retry:     op.Retry,
 		Failures:  0,
+		BlockedBy: op.BlockedBy,
+	}
+}
+
+func taskToDeadTask(t *Task) *Task {
+	return &Task{
+		ID:        t.ID,
+		Queue:     t.Deadqueue,
+		Name:      t.Name,
+		Payload:   t.Payload,
+		Deadqueue: "",
+		ExecuteAt: nil,
+		Retry:     t.Retry,
+		Failures:  0,
+		BlockedBy: t.BlockedBy,
+		// Blocking functionality is not active
+		// in the dead letter queue.
+		blockedBy: nil,
+		blocking:  nil,
 	}
 }

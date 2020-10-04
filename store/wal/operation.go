@@ -248,7 +248,7 @@ func (op *OpAdd) Deserialize(b []byte) error {
 	if at := enc.Uint32(b[:4]); at == 0 {
 		op.ExecuteAt = nil
 	} else {
-		executeAt := time.Unix(int64(at), 0)
+		executeAt := time.Unix(int64(at), 0).UTC()
 		op.ExecuteAt = &executeAt
 	}
 	b = b[4:]
@@ -270,11 +270,12 @@ func (op *OpAdd) Deserialize(b []byte) error {
 }
 
 type OpDelete struct {
-	ID uint32
+	ID      uint32
+	Success bool
 }
 
 func (op OpDelete) Serialize(b []byte) (int, error) {
-	const size = 5
+	const size = 1 + 4
 	if len(b) < size {
 		return 0, fmt.Errorf("buffer too small: %w", ErrSize)
 	}

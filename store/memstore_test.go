@@ -1,54 +1,181 @@
 package store
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"io/ioutil"
 	"log"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 )
 
 func TestOpenStore(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	dir := tempdir(t)
-
-	store, err := OpenMemStore(dir, 1e6, testlog(t))
-	if err != nil {
-		t.Fatalf("cannot open store with an empty directory: %s", err)
+	cases := map[string]struct {
+		Ops func(context.Context, testing.TB, *MemStore)
+	}{
+		"empty state": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {},
+		},
+		"two tasks scheduled one consumed": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				if _, err := s.Push(ctx, Task{Name: "first", Queue: "default"}); err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default"}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"two tasks scheduled one false acked": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				if _, err := s.Push(ctx, Task{Name: "first", Queue: "default"}); err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default"}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"a delayed task scheduled": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+				if _, err := s.Push(ctx, Task{
+					Name:      "first",
+					Queue:     "default",
+					ExecuteAt: &future,
+				}); err != nil {
+					t.Fatalf("cannot push delayed task: %s", err)
+				}
+			},
+		},
+		"a blocked task scheduled": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				id, err := s.Push(ctx, Task{Name: "first", Queue: "default"})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{id}}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+			},
+		},
+		"a blocking task succeeded": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				id, err := s.Push(ctx, Task{Name: "first", Queue: "default"})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{id}}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"a blocking task failed": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				id, err := s.Push(ctx, Task{Name: "first", Queue: "default"})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{id}}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if task.Name != "first" {
+					t.Fatalf("wanted first task, got %+v", task)
+				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"a task is moved to dead letter queue": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				if _, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 1}); err != nil {
+					t.Fatalf("cannot push task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
+					t.Fatalf("cannot acknowledge task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
+					t.Fatalf("cannot acknowledge task: %s", err)
+				}
+			},
+		},
 	}
-	defer store.Close()
 
-	if _, err := store.Push(ctx, Task{Name: "first", Queue: "default"}); err != nil {
-		t.Fatalf("cannot push first task: %s", err)
-	}
-	if _, err := store.Push(ctx, Task{Name: "second", Queue: "default"}); err != nil {
-		t.Fatalf("cannot push second task: %s", err)
-	}
-	store.Close()
+	for testName, tc := range cases {
+		t.Run(testName, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
 
-	store, err = OpenMemStore(dir, 1e6, testlog(t))
-	if err != nil {
-		t.Fatalf("cannot open store with an a WAL file present: %s", err)
-	}
-	defer store.Close()
+			dir := tempdir(t)
 
-	if task, err := store.Pull(ctx, []string{"default"}); err != nil {
-		t.Fatalf("expected first task, got error %+v", err)
-	} else if task.Name != "first" {
-		t.Fatalf("expected first task, got %+v", task)
-	}
+			original, err := OpenMemStore(dir, 1e6, testlog(t))
+			if err != nil {
+				t.Fatalf("cannot open store with an empty directory: %s", err)
+			}
+			defer original.Close()
+			tc.Ops(ctx, t, original)
 
-	if task, err := store.Pull(ctx, []string{"default"}); err != nil {
-		t.Fatalf("expected second task, got error %+v", err)
-	} else if task.Name != "second" {
-		t.Fatalf("expected second task, got %+v", task)
+			rebuild, err := OpenMemStore(dir, 1e6, testlog(t))
+			if err != nil {
+				t.Fatalf("cannot open store with an a WAL file present: %s", err)
+			}
+			defer rebuild.Close()
+
+			if o, r := original.nextTaskID, rebuild.nextTaskID; o != r {
+				t.Errorf("original next task id is %d, rebuild %d", o, r)
+			}
+
+			if o, r := len(original.toack), len(rebuild.toack); o != r {
+				t.Fatalf("original store has %d messages to ack, rebuild has %d", o, r)
+			}
+
+			if o, r := len(original.queues), len(rebuild.queues); o != r {
+				t.Fatalf("original store has %d queues, rebuild has %d", o, r)
+			}
+			for _, o := range original.queues {
+				found := false
+				var r *namedQueue
+				for _, r = range rebuild.queues {
+					if r.name == o.name {
+						found = true
+
+						break
+					}
+				}
+				if !found {
+					t.Errorf("original store has %q queue, rebuild does not", o.name)
+					continue
+				}
+				assertTaskListsEqual(t, o.ready, r.ready)
+				assertTaskListsEqual(t, o.delayed, r.delayed)
+			}
+		})
 	}
-	store.Close()
 }
 
 func TestWALVacuum(t *testing.T) {
@@ -279,4 +406,30 @@ func testlog(t testing.TB) *log.Logger {
 	}
 
 	return log.New(ioutil.Discard, t.Name(), log.Lshortfile)
+}
+
+func assertTaskListsEqual(t testing.TB, a, b *list.List) {
+	t.Helper()
+
+	for i, ae, be := 0, a.Front(), b.Front(); ; i, ae, be = i+1, ae.Next(), be.Next() {
+		if ae == nil && be != nil {
+			t.Logf("second: %+v", be.Value.(*Task))
+			t.Fatal("first list is shorter than the second one")
+		}
+		if be == nil && ae != nil {
+			t.Logf("first: %+v", ae.Value.(*Task))
+			t.Fatal("second list is shorter than the first one")
+		}
+		if ae == nil && be == nil {
+			return
+		}
+
+		at := ae.Value.(*Task)
+		bt := be.Value.(*Task)
+		if !reflect.DeepEqual(at, bt) {
+			t.Logf("task from the first list:  %+v", at)
+			t.Logf("task from the second list: %+v", bt)
+			t.Errorf("task difference at position %d", i)
+		}
+	}
 }

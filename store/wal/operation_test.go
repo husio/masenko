@@ -11,7 +11,7 @@ import (
 func TestOpReadWrite(t *testing.T) {
 	now := time.Now()
 	// Serialization is using UNIX seconds precision.
-	now = now.Truncate(time.Second)
+	now = now.Truncate(time.Second).UTC()
 
 	batches := [][]Operation{
 		{
