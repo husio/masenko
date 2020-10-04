@@ -310,6 +310,11 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 // taskByID returns the task with given ID. This is an extremply unperformant
 // lookup algorithm.
 func (m *MemStore) taskByID(id uint32) (*Task, bool) {
+	for _, t := range m.toack {
+		if t.ID == id {
+			return t, true
+		}
+	}
 	for _, queue := range m.queues {
 		for e := queue.ready.Front(); e != nil; e = e.Next() {
 			t := e.Value.(*Task)

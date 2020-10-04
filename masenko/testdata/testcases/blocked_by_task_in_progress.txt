@@ -1,0 +1,29 @@
+client-a send PUSH {"name": "first"}
+client-a recv OK {"id":1}
+
+client-a send FETCH
+client-a recv OK {"id":1,"queue":"default","name":"first"}
+
+# Task with ID is in fetched but not acked.
+client-a send PUSH {"name": "second", "blocked_by":[1]}
+client-a recv OK {"id":2}
+
+# Nothing to fetch because the second task is blocked.
+client-a send FETCH
+client-a recv EMPTY {}
+
+client-a send NACK {"id": 1}
+client-a recv OK {}
+
+client-a send FETCH
+client-a recv OK {"id":1,"queue":"default","name":"first","failures":1}
+
+# Nothing to fetch because the second task is blocked.
+client-a send FETCH
+client-a recv EMPTY {}
+
+client-a send ACK {"id": 1}
+client-a recv OK {}
+
+client-a send FETCH
+client-a recv OK {"id":2,"queue":"default","name":"second"}
