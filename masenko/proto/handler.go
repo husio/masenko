@@ -239,10 +239,12 @@ processAtomicRequests:
 					blockedBy = append(blockedBy, uint32(n))
 				} else {
 					pos := int(n * -1)
-					if pos == 0 || pos > len(pushed) {
-						return c.writeErr(fmt.Sprintf("message %d: PUSH: invalid task position in blocked by", i))
+					if pos == 0 {
+						return c.writeErr(fmt.Sprintf("message %d: PUSH: cannot self reference in blocked by", i))
+					} else if pos > len(pushed) {
+						return c.writeErr(fmt.Sprintf("message %d: PUSH: invalid relative task position in blocked by", i))
 					}
-					blockedBy = append(blockedBy, pushed[len(pushed)-pos-1])
+					blockedBy = append(blockedBy, pushed[len(pushed)-pos])
 				}
 			}
 

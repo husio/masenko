@@ -36,7 +36,7 @@ type Task struct {
 
 	// A list of tasks that are blocking this one from execution.
 	blocking []*Task
-	// A list of tasks that this task is blocking from execution.
+	// A list of tasks that this one is blocking from execution.
 	blockedBy []*Task
 }
 

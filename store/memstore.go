@@ -285,9 +285,6 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 	defer m.mu.Unlock()
 
 	for _, id := range task.BlockedBy {
-		if id >= m.nextTaskID {
-			return 0, fmt.Errorf("task %d is not yet created", id)
-		}
 		// If a task cannot be found then it must have been processed
 		// and we can ignore it.
 		if t, ok := m.taskByID(id); ok {
@@ -664,6 +661,8 @@ func (m *MemStore) Begin(ctx context.Context) Transaction {
 type MemStoreTransaction struct {
 	m        *MemStore
 	ops      []wal.Operation
+	pushed   []*Task
+	acked    []*Task
 	finished bool
 }
 
@@ -672,6 +671,7 @@ func (tx *MemStoreTransaction) Push(ctx context.Context, task Task) (uint32, err
 		return 0, errors.New("transaction finishedd")
 	}
 	task.ID = tx.m.genTaskID()
+	tx.pushed = append(tx.pushed, &task)
 	tx.ops = append(tx.ops, taskToOpAdd(&task))
 	return task.ID, nil
 }
@@ -686,6 +686,7 @@ func (tx *MemStoreTransaction) Acknowledge(ctx context.Context, taskID uint32, a
 		}
 		if ack {
 			tx.ops = append(tx.ops, &wal.OpDelete{ID: task.ID})
+			tx.acked = append(tx.acked, task)
 		} else {
 			return errors.New("NACK not supported")
 		}
@@ -732,6 +733,24 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 
 	if hasAck && tx.m.vacuumSize != 0 && tx.m.walSize > tx.m.vacuumSize {
 		go tx.m.walVacuum()
+	}
+
+	for _, task := range tx.pushed {
+		for _, id := range task.BlockedBy {
+			if t, ok := tx.m.taskByID(id); ok {
+				t.blocking = append(t.blocking, task)
+				task.blockedBy = append(task.blockedBy, t)
+			}
+		}
+	}
+
+	for _, task := range tx.acked {
+		for _, t := range task.blocking {
+			t.blockedBy = deleteTaskRef(t.blockedBy, task)
+			if len(t.blockedBy) == 0 {
+				tx.m.namedQueue(t.Queue).pushTask(t)
+			}
+		}
 	}
 
 	return nil
