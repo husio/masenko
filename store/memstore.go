@@ -121,6 +121,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 				m.nextTaskID = op.NextID
 			case *wal.OpAdd:
 				task := opAddToTask(op)
+				byid[op.ID] = task
 				for _, id := range task.BlockedBy {
 					if other, ok := byid[id]; ok {
 						other.blocking = append(other.blocking, task)
@@ -131,7 +132,6 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 					m.nextTaskID = op.ID + 1
 				}
 				m.namedQueue(op.Queue).pushTask(task)
-				byid[op.ID] = task
 			case *wal.OpFail:
 				task, ok := byid[op.ID]
 				if !ok {
@@ -141,24 +141,21 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 				task.ExecuteAt = &op.ExecuteAt
 
 				queue := m.namedQueue(task.Queue)
-				if task.Failures == 1 {
-					for e := queue.ready.Front(); e != nil; e = e.Next() {
-						t := e.Value.(*Task)
-						if t.ID != op.ID {
-							continue
-						}
-						queue.ready.Remove(e)
-						break
+				for e := queue.ready.Front(); e != nil; e = e.Next() {
+					t := e.Value.(*Task)
+					if t.ID != task.ID {
+						continue
 					}
-				} else {
-					for e := queue.delayed.Front(); e != nil; e = e.Next() {
-						t := e.Value.(*Task)
-						if t.ID != op.ID {
-							continue
-						}
-						queue.delayed.Remove(e)
-						break
+					queue.ready.Remove(e)
+					break
+				}
+				for e := queue.delayed.Front(); e != nil; e = e.Next() {
+					t := e.Value.(*Task)
+					if t.ID != task.ID {
+						continue
 					}
+					queue.delayed.Remove(e)
+					break
 				}
 				m.namedQueue(task.Queue).pushTask(task) // Requeue delayed.
 			case *wal.OpDelete:
@@ -623,6 +620,7 @@ func (m *MemStore) rebuildWAL() error {
 		}
 		if n, err := newWal.Append(ops...); err != nil {
 			writeErr = fmt.Errorf("append to WAL: %w", err)
+			return
 		} else {
 			newSize += n
 		}
@@ -631,14 +629,14 @@ func (m *MemStore) rebuildWAL() error {
 			if _, ok := written[task.ID]; ok {
 				continue
 			}
-			allWritten := true
+			blockingPresent := true
 			for _, id := range task.BlockedBy {
 				if _, ok := written[id]; !ok {
-					allWritten = false
+					blockingPresent = false
 					break
 				}
 			}
-			if allWritten {
+			if blockingPresent {
 				writeTask(task)
 			}
 		}

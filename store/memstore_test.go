@@ -3,7 +3,9 @@ package store
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -11,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/husio/masenko/store/wal"
 )
 
 func TestOpenStore(t *testing.T) {
@@ -231,6 +235,8 @@ func TestOpenStore(t *testing.T) {
 					t.Fatalf("cannot open store with a rebuild WAL: %s", err)
 				}
 				defer rebuild.Close()
+
+				readWal(t, rebuild)
 
 				ensureStoreEqual(t, original, rebuild)
 			})
@@ -502,27 +508,58 @@ func testlog(t testing.TB) *log.Logger {
 }
 
 func assertTaskListsEqual(t testing.TB, a, b *list.List) {
-	t.Helper()
-
 	for i, ae, be := 0, a.Front(), b.Front(); ; i, ae, be = i+1, ae.Next(), be.Next() {
+
 		if ae == nil && be != nil {
-			t.Logf("second: %+v", be.Value.(*Task))
-			t.Fatal("first list is shorter than the second one")
+			t.Logf("%d: second: %+v", i, be.Value)
+			t.Fatalf("first list is shorter than the second one %d < %d", a.Len(), b.Len())
 		}
 		if be == nil && ae != nil {
-			t.Logf("first: %+v", ae.Value.(*Task))
-			t.Fatal("second list is shorter than the first one")
+			t.Logf("%d:  first: %+v", i, ae.Value)
+			t.Fatalf("second list is shorter than the first one %d > %d", a.Len(), b.Len())
 		}
 		if ae == nil && be == nil {
 			return
 		}
 
+		t.Logf("%d:  first: %+v", i, ae.Value)
+		t.Logf("%d: second: %+v", i, be.Value)
+
 		at := ae.Value.(*Task)
 		bt := be.Value.(*Task)
 		if !reflect.DeepEqual(at, bt) {
-			t.Logf("task from the first list:  %+v", at)
-			t.Logf("task from the second list: %+v", bt)
 			t.Errorf("task difference at position %d", i)
+		}
+	}
+}
+
+func readWal(t testing.TB, s *MemStore) {
+	fd, err := os.Open(s.walFd.(*os.File).Name())
+	if err != nil {
+		t.Fatalf("cannot open wal file: %s", err)
+	}
+	defer fd.Close()
+
+	nx := wal.NewOpNexter(fd, 1e6)
+	var entryNo uint
+	for {
+		ops, err := nx.Next()
+		switch {
+		case err == nil:
+			// All good.
+		case errors.Is(err, io.EOF):
+			return
+		default:
+			t.Fatalf("read WAL entry: %s", err)
+		}
+
+		for _, op := range ops {
+			raw, err := json.Marshal(op)
+			if err != nil {
+				t.Fatalf("JSON marshal WAL operation: %s", err)
+			}
+			t.Logf("WAL entry %2d: %14T %s", entryNo, op, string(raw))
+			entryNo++
 		}
 	}
 }
