@@ -52,6 +52,9 @@ func TestOpReadWrite(t *testing.T) {
 				ID:        124,
 				ExecuteAt: now,
 			},
+			&OpNextID{
+				NextID: 402,
+			},
 		},
 	}
 

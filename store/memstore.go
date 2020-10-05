@@ -117,6 +117,8 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 
 		for _, op := range operations {
 			switch op := op.(type) {
+			case *wal.OpNextID:
+				m.nextTaskID = op.NextID
 			case *wal.OpAdd:
 				task := opAddToTask(op)
 				for _, id := range task.BlockedBy {
@@ -133,7 +135,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 			case *wal.OpFail:
 				task, ok := byid[op.ID]
 				if !ok {
-					return fmt.Errorf("cannot delete missing task %d", op.ID)
+					return fmt.Errorf("fail missing task #%d", op.ID)
 				}
 				task.Failures++
 				task.ExecuteAt = &op.ExecuteAt
@@ -162,7 +164,7 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 			case *wal.OpDelete:
 				task, ok := byid[op.ID]
 				if !ok {
-					return fmt.Errorf("cannot delete missing task %d", op.ID)
+					return fmt.Errorf("delete missing task #%d", op.ID)
 				}
 				queue := m.namedQueue(task.Queue)
 
@@ -529,13 +531,25 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 	return ErrNotFound
 }
 
-// allBlocking appends to given slice all tasks that are directly and indirectly blocked by given task.
+// allBlocking appends to given slice all tasks that are directly and
+// indirectly blocked by given task. Each task is listed only once.
 func allBlocked(root *Task, all []*Task) []*Task {
 	for _, t := range root.blocking {
-		all = append(all, t)
+		if !containsTask(all, t) {
+			all = append(all, t)
+		}
 		all = allBlocked(t, all)
 	}
 	return all
+}
+
+func containsTask(all []*Task, t *Task) bool {
+	for _, tt := range all {
+		if tt.ID == t.ID {
+			return true
+		}
+	}
+	return false
 }
 
 // deleteTaskRef modifies given list of refenreces.
@@ -546,11 +560,16 @@ func deleteTaskRef(references []*Task, t *Task) []*Task {
 		}
 		references[i] = references[len(references)-1]
 		references[len(references)-1] = nil
-		return references[:len(references)-1]
+		references = references[:len(references)-1]
+	}
+	if len(references) == 0 {
+		return nil
 	}
 	return references
 }
 
+// genTaskID returns the next free ID that should be assigned to a newly
+// created task. Calling this method always increments the counter.
 func (m *MemStore) genTaskID() uint32 {
 	if m.nextTaskID == math.MaxUint32 {
 		m.nextTaskID = 1
@@ -583,22 +602,47 @@ func (m *MemStore) rebuildWAL() error {
 		newSize  int
 		writeErr error
 		ops      = make([]wal.Operation, 257)
+		written  = make(map[uint32]struct{})
 	)
-	writeTask := func(t *Task) {
+
+	var writeTask func(t *Task)
+	writeTask = func(t *Task) {
 		if writeErr != nil {
 			return
 		}
+		if _, ok := written[t.ID]; ok {
+			return
+		}
+
 		ops := ops[:1]
 		ops[0] = taskToOpAdd(t)
+		written[t.ID] = struct{}{}
+
 		for i := uint8(0); i < t.Failures; i++ {
 			ops = append(ops, &wal.OpFail{ID: t.ID, ExecuteAt: *t.ExecuteAt})
 		}
-
 		if n, err := newWal.Append(ops...); err != nil {
 			writeErr = fmt.Errorf("append to WAL: %w", err)
 		} else {
 			newSize += n
 		}
+
+		for _, task := range allBlocked(t, nil) {
+			if _, ok := written[task.ID]; ok {
+				continue
+			}
+			allWritten := true
+			for _, id := range task.BlockedBy {
+				if _, ok := written[id]; !ok {
+					allWritten = false
+					break
+				}
+			}
+			if allWritten {
+				writeTask(task)
+			}
+		}
+
 	}
 
 	for _, t := range m.toack {
@@ -616,6 +660,13 @@ func (m *MemStore) rebuildWAL() error {
 	if writeErr != nil {
 		return writeErr
 	}
+
+	if n, err := newWal.Append(&wal.OpNextID{NextID: m.nextTaskID}); err != nil {
+		writeErr = fmt.Errorf("append to WAL next ID: %w", err)
+	} else {
+		newSize += n
+	}
+
 	if err := bfd.Flush(); err != nil {
 		return fmt.Errorf("flush new WAL: %w", err)
 	}

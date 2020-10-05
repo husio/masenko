@@ -100,6 +100,7 @@ const (
 	opKindAdd = 1 << iota
 	opKindDelete
 	opKindFail
+	opKindNextID
 )
 
 type Operation interface {
@@ -128,6 +129,29 @@ var operationsIdx = [math.MaxUint8]func() Operation{
 	opKindAdd:    func() Operation { return &OpAdd{} },
 	opKindDelete: func() Operation { return &OpDelete{} },
 	opKindFail:   func() Operation { return &OpFail{} },
+	opKindNextID: func() Operation { return &OpNextID{} },
+}
+
+type OpNextID struct {
+	NextID uint32
+}
+
+func (op OpNextID) Serialize(b []byte) (int, error) {
+	if len(b) < 5 {
+		return 0, fmt.Errorf("buffer too small: %w", ErrSize)
+	}
+	b[0] = opKindNextID
+	enc.PutUint32(b[1:5], op.NextID)
+	return 5, nil
+}
+
+func (op *OpNextID) Deserialize(b []byte) error {
+	if kind := OperationKind(b[0]); kind != opKindNextID {
+		return fmt.Errorf("invalid kind %d: %w", kind, ErrInput)
+	}
+	b = b[1:]
+	op.NextID = enc.Uint32(b[:4])
+	return nil
 }
 
 type OpAdd struct {

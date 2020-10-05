@@ -73,15 +73,46 @@ func TestOpenStore(t *testing.T) {
 				}
 			},
 		},
-		"a blocking task succeeded": {
+		"a nested blocking task succeeded": {
 			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
-				id, err := s.Push(ctx, Task{Name: "first", Queue: "default"})
+				first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 0})
 				if err != nil {
 					t.Fatalf("cannot push first task: %s", err)
 				}
-				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{id}}); err != nil {
+				second, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{first}})
+				if err != nil {
 					t.Fatalf("cannot push second task: %s", err)
 				}
+				third, err := s.Push(ctx, Task{Name: "third", Queue: "default", BlockedBy: []uint32{first, second}})
+				if err != nil {
+					t.Fatalf("cannot push third task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "fourth", Queue: "default", BlockedBy: []uint32{third}}); err != nil {
+					t.Fatalf("cannot push fourth task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"a blocking task succeeded": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 10})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{first}}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "third", Queue: "default", BlockedBy: []uint32{first}}); err != nil {
+					t.Fatalf("cannot push third task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "fourth", Queue: "default", BlockedBy: []uint32{first}}); err != nil {
+					t.Fatalf("cannot push fourth task: %s", err)
+				}
+
 				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
 					t.Fatalf("cannot pull a task: %s", err)
 				} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
@@ -98,6 +129,33 @@ func TestOpenStore(t *testing.T) {
 				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{id}}); err != nil {
 					t.Fatalf("cannot push second task: %s", err)
 				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if task.Name != "first" {
+					t.Fatalf("wanted first task, got %+v", task)
+				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
+		"a nested blocking task failed": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 0})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				second, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{first}})
+				if err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				third, err := s.Push(ctx, Task{Name: "third", Queue: "default", BlockedBy: []uint32{first, second}})
+				if err != nil {
+					t.Fatalf("cannot push third task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "fourth", Queue: "default", BlockedBy: []uint32{third}}); err != nil {
+					t.Fatalf("cannot push fourth task: %s", err)
+				}
+
 				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
 					t.Fatalf("cannot pull a task: %s", err)
 				} else if task.Name != "first" {
@@ -154,41 +212,62 @@ func TestOpenStore(t *testing.T) {
 			defer original.Close()
 			tc.Ops(ctx, t, original)
 
-			rebuild, err := OpenMemStore(dir, 1e6, testlog(t))
-			if err != nil {
-				t.Fatalf("cannot open store with an a WAL file present: %s", err)
-			}
-			defer rebuild.Close()
-
-			if o, r := original.nextTaskID, rebuild.nextTaskID; o != r {
-				t.Errorf("original next task id is %d, rebuild %d", o, r)
-			}
-
-			if o, r := len(original.toack), len(rebuild.toack); o != r {
-				t.Fatalf("original store has %d messages to ack, rebuild has %d", o, r)
-			}
-
-			if o, r := len(original.queues), len(rebuild.queues); o != r {
-				t.Fatalf("original store has %d queues, rebuild has %d", o, r)
-			}
-			for _, o := range original.queues {
-				found := false
-				var r *namedQueue
-				for _, r = range rebuild.queues {
-					if r.name == o.name {
-						found = true
-
-						break
-					}
+			t.Run("rebuild", func(t *testing.T) {
+				rebuild, err := OpenMemStore(dir, 1e6, testlog(t))
+				if err != nil {
+					t.Fatalf("cannot open store with an a WAL file present: %s", err)
 				}
-				if !found {
-					t.Errorf("original store has %q queue, rebuild does not", o.name)
-					continue
+				defer rebuild.Close()
+
+				ensureStoreEqual(t, original, rebuild)
+			})
+
+			t.Run("vacuum", func(t *testing.T) {
+				if err := original.rebuildWAL(); err != nil {
+					t.Fatalf("rebuild WAL: %s", err)
 				}
-				assertTaskListsEqual(t, o.ready, r.ready)
-				assertTaskListsEqual(t, o.delayed, r.delayed)
-			}
+				rebuild, err := OpenMemStore(dir, 1e6, testlog(t))
+				if err != nil {
+					t.Fatalf("cannot open store with a rebuild WAL: %s", err)
+				}
+				defer rebuild.Close()
+
+				ensureStoreEqual(t, original, rebuild)
+			})
 		})
+	}
+}
+
+func ensureStoreEqual(t testing.TB, original, rebuild *MemStore) {
+	t.Helper()
+
+	if o, r := original.nextTaskID, rebuild.nextTaskID; o != r {
+		t.Errorf("original next task id is %d, rebuild %d", o, r)
+	}
+
+	if o, r := len(original.toack), len(rebuild.toack); o != r {
+		t.Fatalf("original store has %d messages to ack, rebuild has %d", o, r)
+	}
+
+	if o, r := len(original.queues), len(rebuild.queues); o != r {
+		t.Fatalf("original store has %d queues, rebuild has %d", o, r)
+	}
+	for _, o := range original.queues {
+		found := false
+		var r *namedQueue
+		for _, r = range rebuild.queues {
+			if r.name == o.name {
+				found = true
+
+				break
+			}
+		}
+		if !found {
+			t.Errorf("original store has %q queue, rebuild does not", o.name)
+			continue
+		}
+		assertTaskListsEqual(t, o.ready, r.ready)
+		assertTaskListsEqual(t, o.delayed, r.delayed)
 	}
 }
 
