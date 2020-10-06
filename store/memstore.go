@@ -110,6 +110,11 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 		case err == nil:
 			// All good.
 		case errors.Is(err, io.EOF):
+			for _, queue := range m.queues {
+				if queue.Empty() {
+					m.deleteMasenko(queue.name)
+				}
+			}
 			return nil
 		default:
 			return fmt.Errorf("read wal entry: %w", err)
@@ -515,6 +520,10 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			}
 		}
 
+		if m.namedQueue(task.Queue).Empty() {
+			m.deleteMasenko(task.Queue)
+		}
+
 		if n, err := m.walWr.Append(batch...); err != nil {
 			return fmt.Errorf("wal append: %w", err)
 		} else {
@@ -629,16 +638,10 @@ func (m *MemStore) rebuildWAL() error {
 			if _, ok := written[task.ID]; ok {
 				continue
 			}
-			blockingPresent := true
-			for _, id := range task.BlockedBy {
-				if _, ok := written[id]; !ok {
-					blockingPresent = false
-					break
-				}
+			if maxUint(task.BlockedBy) != t.ID {
+				continue
 			}
-			if blockingPresent {
-				writeTask(task)
-			}
+			writeTask(task)
 		}
 
 	}
@@ -697,6 +700,19 @@ func (m *MemStore) rebuildWAL() error {
 	m.walFd = fd
 
 	return nil
+}
+
+func maxUint(ns []uint32) uint32 {
+	if len(ns) == 0 {
+		return 0
+	}
+	max := ns[0]
+	for _, n := range ns {
+		if n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 func (m *MemStore) Begin(ctx context.Context) Transaction {

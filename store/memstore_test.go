@@ -101,6 +101,30 @@ func TestOpenStore(t *testing.T) {
 				}
 			},
 		},
+		"another nested blocking task succeeded": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 0})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				second, err := s.Push(ctx, Task{Name: "second", Queue: "default"})
+				if err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+				third, err := s.Push(ctx, Task{Name: "third", Queue: "default", BlockedBy: []uint32{second}})
+				if err != nil {
+					t.Fatalf("cannot push third task: %s", err)
+				}
+				if _, err := s.Push(ctx, Task{Name: "fourth", Queue: "default", BlockedBy: []uint32{third, first}}); err != nil {
+					t.Fatalf("cannot push fourth task: %s", err)
+				}
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
+				}
+			},
+		},
 		"a blocking task succeeded": {
 			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
 				first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 10})
@@ -256,7 +280,8 @@ func ensureStoreEqual(t testing.TB, original, rebuild *MemStore) {
 	}
 
 	if o, r := len(original.queues), len(rebuild.queues); o != r {
-		t.Fatalf("original store has %d queues, rebuild has %d", o, r)
+		t.Errorf("original store has %d queues %q, rebuild has %d %q",
+			o, queueNames(original.queues), r, queueNames(rebuild.queues))
 	}
 	for _, o := range original.queues {
 		found := false
@@ -269,12 +294,21 @@ func ensureStoreEqual(t testing.TB, original, rebuild *MemStore) {
 			}
 		}
 		if !found {
-			t.Errorf("original store has %q queue, rebuild does not", o.name)
+			t.Errorf("original store has %q queue with %d, %d, %d tasks, rebuild does not",
+				o.name, o.ntoack, o.ready.Len(), o.delayed.Len())
 			continue
 		}
 		assertTaskListsEqual(t, o.ready, r.ready)
 		assertTaskListsEqual(t, o.delayed, r.delayed)
 	}
+}
+
+func queueNames(queues []*namedQueue) []string {
+	var names []string
+	for _, q := range queues {
+		names = append(names, q.name)
+	}
+	return names
 }
 
 func TestWALVacuum(t *testing.T) {
