@@ -28,6 +28,7 @@ Request: `PUSH {...}`
  payload       any                       A JSON serilized task payload
  retry         uint            20        How many times a failed task must be retried before removed
  execute_at    string RFC3339            If provided, task cannot be fetched before given date
+ blocked_by    int list                  A list of task IDs that must be executed before this one. Can use a relative position instead of task ID inside of a transaction.
 =============  ==============  ========  ============
 
 
@@ -89,6 +90,8 @@ Response: `OK {}`
 
 Negative acknowledge a task with given ID, fetched by the client. Negative acknowledging marks task as unsuccessfully executed and applies retry logic in order to make it available for future processing.
 
+All tasks that are blocked by this task are failed as well, as they will never be executed otherwise.
+
 Command: `NACK { ... }`
 
 ===========   ========   =====================================================
@@ -105,6 +108,8 @@ Response: `OK {}`
 
 Return the current server state information.
 
+Keep in mind that metrics are collected by Prometheus.
+
 Command: `INFO {}`
 
 Response: `OK {"queues": [ ... ], "metrics": { ... } }`
@@ -117,14 +122,6 @@ Response: `OK {"queues": [ ... ], "metrics": { ... } }`
  queues.ready              uint            Number of tasks ready to be fetched.
  queues.delayed            uint            Number of tasks that are scheduled for fetching in the future.
  queues.to_ack             uint            Number of fetched tasks that await acknowledgment from the client.
- metrics                   object          Various global server metrics.
- metrics.clients           uint            Number of currently connected clients.
- metrics.push              uint            Number of PUSH requests handled.
- metrics.fetch             uint            Number of FETCH requests handled.
- metrics.ack               uint            Number of ACK requests handled.
- metrics.nack              uint            Number of NACK requests handled.
- metrics.request           uint            Number of requests handled.
- metrics.request-error     uint            Number of requests that could not be handled due to an error.
 ========================   =============   ============
 
 `QUIT`
@@ -144,12 +141,24 @@ Response: `OK {}`
 
 Only `PUSH` and `ACK` commands are allowed inside of a transaction.
 
+
 .. code::
 
    ATOMIC \n
    PUSH {"name": "register-user", "payload": {"name": "John", "admin": false}} \n
    PUSH {"name": "send-email", "payload": {"to": "john@example.com", "subject": "Hello"}} \n
    ACK {"id": 123456} \n
+   DONE \n
+
+`PUSH` command can use relative position instead of task ID when specifing `blocked_by` attribute.
+
+.. code::
+
+   ATOMIC \n
+   PUSH {"name": "register-user"} \n
+   PUSH {"name": "notify-accounting"} \n
+   PUSH {"name": "initialize-account", "blocked_by": [-2]} \n
+   PUSH {"name": "send-password-reset-email", "blocked_by": [-1, -3]} \n
    DONE \n
 
 Response: `OK {}`
