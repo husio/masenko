@@ -17,6 +17,50 @@ import (
 	"github.com/husio/masenko/store/wal"
 )
 
+func TestDelayedBlockedTaskIsUnblocked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	dir := tempdir(t)
+
+	s, err := OpenMemStore(dir, 1e6, testlog(t))
+	if err != nil {
+		t.Fatalf("cannot open store with an empty directory: %s", err)
+	}
+	defer s.Close()
+
+	first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 0})
+	if err != nil {
+		t.Fatalf("cannot push first task: %s", err)
+	}
+	future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{first}, ExecuteAt: &future}); err != nil {
+		t.Fatalf("cannot push second task: %s", err)
+	}
+
+	if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+		t.Fatalf("cannot pull a task: %s", err)
+	} else if task.Name != "first" {
+		t.Fatalf("wanted first task, got %+v", task)
+	} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
+		t.Fatalf("cannot ack a task: %s", err)
+	}
+
+	shortCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	if task, err := s.Pull(shortCtx, []string{"default"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline error, got %v, %+v", err, task)
+	}
+
+	queue := s.namedQueue("default")
+	if queue.ready.Len() != 0 {
+		t.Errorf("expected ready tasks queue to be 0 length, got %d", queue.ready.Len())
+	}
+	if queue.delayed.Len() != 1 {
+		t.Errorf("expected delayed tasks queue to be 1 length, got %d", queue.delayed.Len())
+	}
+}
+
 func TestOpenStore(t *testing.T) {
 	cases := map[string]struct {
 		Ops func(context.Context, testing.TB, *MemStore)
@@ -221,6 +265,26 @@ func TestOpenStore(t *testing.T) {
 					t.Fatalf("cannot pull a task: %s", err)
 				} else if err := s.Acknowledge(ctx, task.ID, false); err != nil {
 					t.Fatalf("cannot acknowledge task: %s", err)
+				}
+			},
+		},
+		"a delayed blocked task is unblocked": {
+			Ops: func(ctx context.Context, t testing.TB, s *MemStore) {
+				first, err := s.Push(ctx, Task{Name: "first", Queue: "default", Retry: 0})
+				if err != nil {
+					t.Fatalf("cannot push first task: %s", err)
+				}
+				future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+				if _, err := s.Push(ctx, Task{Name: "second", Queue: "default", BlockedBy: []uint32{first}, ExecuteAt: &future}); err != nil {
+					t.Fatalf("cannot push second task: %s", err)
+				}
+
+				if task, err := s.Pull(ctx, []string{"default"}); err != nil {
+					t.Fatalf("cannot pull a task: %s", err)
+				} else if task.Name != "first" {
+					t.Fatalf("wanted first task, got %+v", task)
+				} else if err := s.Acknowledge(ctx, task.ID, true); err != nil {
+					t.Fatalf("cannot ack a task: %s", err)
 				}
 			},
 		},
