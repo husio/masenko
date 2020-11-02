@@ -106,7 +106,8 @@ func TestOpenStore(t *testing.T) {
 
 			dir := tempdir(t)
 
-			original, err := OpenMemStore(dir, 1e6, testlog(t))
+			var metrics counter
+			original, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
 			if err != nil {
 				t.Fatalf("cannot open store with an empty directory: %s", err)
 			}
@@ -114,7 +115,7 @@ func TestOpenStore(t *testing.T) {
 			tc.Ops(ctx, t, original)
 
 			t.Run("rebuild", func(t *testing.T) {
-				rebuild, err := OpenMemStore(dir, 1e6, testlog(t))
+				rebuild, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
 				if err != nil {
 					t.Fatalf("cannot open store with an a WAL file present: %s", err)
 				}
@@ -127,7 +128,7 @@ func TestOpenStore(t *testing.T) {
 				if err := original.rebuildWAL(); err != nil {
 					t.Fatalf("rebuild WAL: %s", err)
 				}
-				rebuild, err := OpenMemStore(dir, 1e6, testlog(t))
+				rebuild, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
 				if err != nil {
 					t.Fatalf("cannot open store with a rebuild WAL: %s", err)
 				}
@@ -194,7 +195,8 @@ func TestWALVacuum(t *testing.T) {
 		tasksPushed  = 10
 		walEntrySize = 41
 	)
-	store, err := OpenMemStore(dir, walEntrySize*tasksPushed, testlog(t))
+	var metrics counter
+	store, err := OpenMemStore(dir, walEntrySize*tasksPushed, testlog(t), &metrics)
 	if err != nil {
 		t.Fatalf("cannot open store with an empty directory: %s", err)
 	}
@@ -232,7 +234,7 @@ func TestWALVacuum(t *testing.T) {
 
 	// Ensure that opening a new store will recreate the state from the
 	// log. A single task was acknowledge, all others must be there.
-	store, err = OpenMemStore(dir, walEntrySize*tasksPushed, testlog(t))
+	store, err = OpenMemStore(dir, walEntrySize*tasksPushed, testlog(t), &metrics)
 	if err != nil {
 		t.Fatalf("cannot open store with a non empty directory: %s", err)
 	}
@@ -290,7 +292,8 @@ func BenchmarkSwitchWAL(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b))
+	var metrics counter
+	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b), &metrics)
 	if err != nil {
 		b.Fatalf("new mem store: %s", err)
 	}
@@ -322,7 +325,8 @@ func BenchmarkMemStorePush(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b))
+	var metrics counter
+	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b), &metrics)
 	if err != nil {
 		b.Fatalf("new mem store: %s", err)
 	}
@@ -359,7 +363,8 @@ func BenchmarkMemStorePull(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b))
+	var metrics counter
+	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b), &metrics)
 	if err != nil {
 		b.Fatalf("new mem store: %s", err)
 	}
@@ -469,4 +474,41 @@ func readWal(t testing.TB, s *MemStore) {
 			entryNo++
 		}
 	}
+}
+
+type counter struct {
+	mu     sync.Mutex
+	queues map[string]int64
+}
+
+func (c *counter) IncrQueue(queueName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.queues == nil {
+		c.queues = make(map[string]int64)
+	}
+	c.queues[queueName]++
+}
+func (c *counter) DecrQueue(queueName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.queues == nil {
+		c.queues = make(map[string]int64)
+	}
+	c.queues[queueName]--
+}
+
+func (c *counter) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queues = make(map[string]int64)
+}
+
+func (c *counter) SetQueueSize(queueName string, n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.queues == nil {
+		c.queues = make(map[string]int64)
+	}
+	c.queues[queueName] = int64(n)
 }

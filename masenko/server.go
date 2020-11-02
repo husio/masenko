@@ -41,7 +41,7 @@ func StartServer(ctx context.Context, conf ServerConfiguration) (*server, error)
 
 	logger := log.New(os.Stdout, "masenko: ", log.LUTC)
 
-	queue, err := store.OpenMemStore(conf.StoreDir, conf.MaxWALSize, logger)
+	queue, err := store.OpenMemStore(conf.StoreDir, conf.MaxWALSize, logger, metrics)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("open store: %w", err)

@@ -25,9 +25,10 @@ import (
 // operations are written to WAL file, so state recovery is possible at any
 // moment.
 type MemStore struct {
-	now    func() time.Time
-	walDir string
-	log    *log.Logger
+	now     func() time.Time
+	walDir  string
+	log     *log.Logger
+	metrics MetricCounter
 
 	mu         sync.Mutex
 	rand       rand.Rand
@@ -43,7 +44,7 @@ type MemStore struct {
 // OpenMemStore returns a new MemStore instance initialized with WAL in given
 // directory. If WAL files are found, the oldest (decided by file name) of the
 // WAL files is used to populate the state.
-func OpenMemStore(walDir string, vacuumSize uint64, logger *log.Logger) (*MemStore, error) {
+func OpenMemStore(walDir string, vacuumSize uint64, logger *log.Logger, mc MetricCounter) (*MemStore, error) {
 	// The current implementation does not sync the data after write. This
 	// is safe if the Masenko process crash, because Masenko does not
 	// buffer writes and system should make sure file buffer is flushed
@@ -63,6 +64,7 @@ func OpenMemStore(walDir string, vacuumSize uint64, logger *log.Logger) (*MemSto
 	}
 
 	store := &MemStore{
+		metrics:    mc,
 		vacuumSize: vacuumSize,
 		walDir:     walDir,
 		log:        logger,
@@ -91,6 +93,17 @@ func OpenMemStore(walDir string, vacuumSize uint64, logger *log.Logger) (*MemSto
 	return store, nil
 }
 
+type MetricCounter interface {
+	// IncrQueue increments the total amount of tasks in the queue with the
+	// given name.
+	IncrQueue(string)
+	// DecrQueue decrements the total amount of tasks in the queue with the
+	// given name.
+	DecrQueue(string)
+	// SetQueueSize sets the current queue size to given value.
+	SetQueueSize(string, int)
+}
+
 // Size of the WAL write buffer. Should be big enough to acommodate all
 // operations written within a single WAL append.
 const walBufferSize = 1e6 // Around 1Mb.
@@ -110,10 +123,13 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 		case err == nil:
 			// All good.
 		case errors.Is(err, io.EOF):
-			for _, queue := range m.queues {
-				if queue.Empty() {
-					m.deleteMasenko(queue.name)
+			for _, q := range m.queues {
+				if q.Empty() {
+					m.deleteMasenko(q.name)
+					m.metrics.SetQueueSize(q.name, 0)
+					continue
 				}
+				m.metrics.SetQueueSize(q.name, q.ready.Len()+q.delayed.Len())
 			}
 			return nil
 		default:
@@ -303,6 +319,7 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 	}
 
 	m.namedQueue(task.Queue).pushTask(&task)
+	m.metrics.IncrQueue(task.Queue)
 	return task.ID, nil
 }
 
@@ -404,7 +421,7 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			if m.vacuumSize != 0 && m.walSize > m.vacuumSize {
 				go m.walVacuum()
 			}
-
+			m.metrics.DecrQueue(task.Queue)
 			return nil
 		}
 
@@ -441,11 +458,11 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		batch := []wal.Operation{
 			&wal.OpDelete{ID: task.ID},
 		}
-		deadTasks := make([]*Task, 0, 4)
 
+		var deadTask *Task
 		if task.Deadqueue != "" {
-			deadTasks = append(deadTasks, taskToDeadTask(task))
-			batch = append(batch, taskToOpAdd(deadTasks[0]))
+			deadTask = taskToDeadTask(task)
+			batch = append(batch, taskToOpAdd(deadTask))
 		}
 
 		if m.namedQueue(task.Queue).Empty() {
@@ -457,9 +474,13 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		} else {
 			m.walSize += uint64(n)
 		}
-		for _, dead := range deadTasks {
-			m.namedQueue(dead.Queue).pushTask(dead)
+
+		if deadTask != nil {
+			m.namedQueue(deadTask.Queue).pushTask(deadTask)
+			m.metrics.IncrQueue(deadTask.Queue)
 		}
+		m.metrics.DecrQueue(task.Queue)
+
 		return nil
 	}
 	return ErrNotFound

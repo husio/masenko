@@ -26,6 +26,11 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "responses_total",
 			Help:      "Total number of responses.",
 		}, []string{"verb"}),
+		queues: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "masenko",
+			Name:      "tasks_total",
+			Help:      "The number of tasks in each queue ready to be fetched.",
+		}, []string{"queue"}),
 	}
 	if err := reg.Register(m.clients); err != nil {
 		return nil, fmt.Errorf("register clients: %w", err)
@@ -36,6 +41,9 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 	if err := reg.Register(m.responses); err != nil {
 		return nil, fmt.Errorf("register responses: %w", err)
 	}
+	if err := reg.Register(m.queues); err != nil {
+		return nil, fmt.Errorf("register queues: %w", err)
+	}
 	return m, nil
 }
 
@@ -45,13 +53,14 @@ type Metrics struct {
 	clients   prometheus.Gauge
 	requests  *prometheus.CounterVec
 	responses *prometheus.CounterVec
+	queues    *prometheus.GaugeVec
 }
 
 // IncrClient must be called when a new client is connected.
-func (m *Metrics) IncrClient() { m.clients.Inc() }
+func (m Metrics) IncrClient() { m.clients.Inc() }
 
 // DecrClient must be called when a client disconnects.
-func (m *Metrics) DecrClient() { m.clients.Dec() }
+func (m Metrics) DecrClient() { m.clients.Dec() }
 
 func (m *Metrics) IncrFetch()         { m.requests.With(prometheus.Labels{"verb": "FETCH"}).Inc() }
 func (m *Metrics) IncrPush()          { m.requests.With(prometheus.Labels{"verb": "PUSH"}).Inc() }
@@ -65,3 +74,16 @@ func (m *Metrics) IncrResponseOK()    { m.responses.With(prometheus.Labels{"verb
 func (m *Metrics) IncrResponseErr()   { m.responses.With(prometheus.Labels{"verb": "ERR"}).Inc() }
 func (m *Metrics) IncrResponseEmpty() { m.responses.With(prometheus.Labels{"verb": "EMPTY"}).Inc() }
 func (m *Metrics) IncrResponsePong()  { m.responses.With(prometheus.Labels{"verb": "PONG"}).Inc() }
+
+func (m *Metrics) IncrQueue(queueName string) {
+	fmt.Println("incr", queueName)
+	m.queues.With(prometheus.Labels{"queue": queueName}).Inc()
+}
+func (m *Metrics) DecrQueue(queueName string) {
+	fmt.Println("decr", queueName)
+	m.queues.With(prometheus.Labels{"queue": queueName}).Dec()
+}
+
+func (m *Metrics) SetQueueSize(queueName string, n int) {
+	m.queues.With(prometheus.Labels{"queue": queueName}).Set(float64(n))
+}
