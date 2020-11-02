@@ -162,7 +162,6 @@ type OpAdd struct {
 	Deadqueue string
 	ExecuteAt *time.Time
 	Retry     uint8
-	BlockedBy []uint32
 }
 
 func (op OpAdd) Serialize(b []byte) (int, error) {
@@ -186,8 +185,7 @@ func (op OpAdd) Serialize(b []byte) (int, error) {
 		1 + len(op.Deadqueue) +
 		2 + len(op.Payload) +
 		4 + // ExecuteAt as UNIX time
-		1 + // Retry
-		1 + 4*len(op.BlockedBy)
+		1 // Retry
 	if size > len(b) {
 		return 0, fmt.Errorf("buffer too small: %w", ErrSize)
 	}
@@ -232,12 +230,6 @@ func (op OpAdd) Serialize(b []byte) (int, error) {
 	b[0] = uint8(op.Retry)
 	b = b[1:]
 
-	b[0] = uint8(len(op.BlockedBy))
-	for i, id := range op.BlockedBy {
-		enc.PutUint32(b[1+i*4:], id)
-	}
-	b = b[1+len(op.BlockedBy)*4:]
-
 	return size, nil
 }
 
@@ -279,16 +271,6 @@ func (op *OpAdd) Deserialize(b []byte) error {
 
 	op.Retry = uint8(b[0])
 	b = b[1:]
-
-	blockedLen := int(b[0])
-	b = b[1:]
-	if blockedLen > 0 {
-		op.BlockedBy = make([]uint32, blockedLen)
-		for i := 0; i < blockedLen; i++ {
-			op.BlockedBy[i] = enc.Uint32(b)
-			b = b[4:]
-		}
-	}
 
 	return nil
 }

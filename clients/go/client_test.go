@@ -300,12 +300,18 @@ func RunServerAndClient(ctx context.Context, t testing.TB) masenkoclient.Client 
 	t.Helper()
 
 	serverAddr := RunServer(ctx, t)
-	c, err := masenkoclient.Dial(serverAddr)
-	if err != nil {
-		t.Fatalf("cannot connect: %s", err)
+
+	for i := 0; ; i++ {
+		c, err := masenkoclient.Dial(serverAddr)
+		if err != nil {
+			if i > 200 {
+				t.Fatalf("cannot connect: %s", err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		} else {
+			return c
+		}
 	}
-	t.Cleanup(func() { c.Close() })
-	return c
 }
 
 func RunServer(ctx context.Context, t testing.TB) string {

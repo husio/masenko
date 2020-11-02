@@ -23,7 +23,6 @@ func TestOpReadWrite(t *testing.T) {
 				Deadqueue: "a-deadqueue",
 				ExecuteAt: &now,
 				Retry:     2,
-				BlockedBy: []uint32{1942942492, 42, 924},
 			},
 		},
 		{
@@ -149,7 +148,6 @@ func TestSerializeDeserializeAdd(t *testing.T) {
 			Payload:   []byte("qwertyuiop0987654321"),
 			Deadqueue: "a-deadqueue",
 			Retry:     6,
-			BlockedBy: []uint32{292941, 122813883},
 		},
 	}
 

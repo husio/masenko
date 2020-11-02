@@ -233,21 +233,6 @@ processAtomicRequests:
 				return c.writeErr(fmt.Sprintf("message %d: PUSH: %s", i, err))
 			}
 
-			var blockedBy []uint32
-			for _, n := range req.BlockedBy {
-				if n > 0 {
-					blockedBy = append(blockedBy, uint32(n))
-				} else {
-					pos := int(n * -1)
-					if pos == 0 {
-						return c.writeErr(fmt.Sprintf("message %d: PUSH: cannot self reference in blocked by", i))
-					} else if pos > len(pushed) {
-						return c.writeErr(fmt.Sprintf("message %d: PUSH: invalid relative task position in blocked by", i))
-					}
-					blockedBy = append(blockedBy, pushed[len(pushed)-pos])
-				}
-			}
-
 			task := store.Task{
 				Name:      req.Name,
 				Queue:     req.Queue,
@@ -255,7 +240,6 @@ processAtomicRequests:
 				Payload:   req.Payload,
 				Retry:     req.Retry,
 				ExecuteAt: req.ExecuteAt,
-				BlockedBy: blockedBy,
 			}
 			if id, err := tx.Push(ctx, task); err != nil {
 				return c.writeErr(fmt.Sprintf("message %d: PUSH: %s", i, err))
@@ -309,13 +293,6 @@ func (c *clientHandler) handlePush(ctx context.Context, payload []byte) error {
 	if err != nil {
 		return c.writeErr(err.Error())
 	}
-	var blockedBy []uint32
-	for _, n := range req.BlockedBy {
-		if n <= 0 {
-			return c.writeErr("cannot use relative blocked by outside of a transaction")
-		}
-		blockedBy = append(blockedBy, uint32(n))
-	}
 	task := store.Task{
 		Name:      req.Name,
 		Queue:     req.Queue,
@@ -323,7 +300,6 @@ func (c *clientHandler) handlePush(ctx context.Context, payload []byte) error {
 		Payload:   req.Payload,
 		Retry:     req.Retry,
 		ExecuteAt: req.ExecuteAt,
-		BlockedBy: blockedBy,
 	}
 	taskID, err := c.queue.Push(ctx, task)
 	if err != nil {
@@ -359,9 +335,6 @@ func parsePushRequest(payload []byte) (*pushRequest, error) {
 		t := input.ExecuteAt.Truncate(time.Second).UTC()
 		input.ExecuteAt = &t
 	}
-	if len(input.BlockedBy) > 255 {
-		return nil, errors.New("at most 255 blocked by task IDs can be provided")
-	}
 	return &input, nil
 }
 
@@ -372,7 +345,6 @@ type pushRequest struct {
 	Payload   json.RawMessage `json:"payload"`
 	Retry     uint8           `json:"retry"`
 	ExecuteAt *time.Time      `json:"execute_at,omitempty"`
-	BlockedBy []int64         `json:"blocked_by,omitempty"`
 }
 
 type pushResponse struct {

@@ -51,13 +51,17 @@ func TestPlainTextCases(t *testing.T) {
 					return c
 				}
 
-				conn, err := net.Dial("tcp", "localhost:12001")
-				if err != nil {
-					t.Fatalf("client dial: %s", err)
+				for i := 0; i < 200; i++ {
+					conn, err := net.Dial("tcp", "localhost:12001")
+					if err == nil {
+						c := client{conn: conn, wr: conn, rd: bufio.NewReader(conn)}
+						clients[name] = c
+						return c
+					}
+					time.Sleep(10 * time.Millisecond)
 				}
-				c := client{conn: conn, wr: conn, rd: bufio.NewReader(conn)}
-				clients[name] = c
-				return c
+				t.Fatal("cannot connect to the server")
+				return client{}
 			}
 
 			fd, err := os.Open(p)

@@ -127,12 +127,6 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 			case *wal.OpAdd:
 				task := opAddToTask(op)
 				byid[op.ID] = task
-				for _, id := range task.BlockedBy {
-					if other, ok := byid[id]; ok {
-						other.blocking = append(other.blocking, task)
-						task.blockedBy = append(task.blockedBy, other)
-					}
-				}
 				if op.ID >= m.nextTaskID {
 					m.nextTaskID = op.ID + 1
 				}
@@ -195,19 +189,6 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 					return fmt.Errorf("missing task %d", op.ID)
 				}
 				delete(byid, op.ID)
-
-				// Unblock all blocked tasks. It does not
-				// matter if this task succeeded or failed. If
-				// the original task was deleted because it
-				// failed, a delete wal event will follow for
-				// all blocked tasks.
-				for _, t := range allBlocked(task, nil) {
-					t.blockedBy = deleteTaskRef(t.blockedBy, task)
-					if len(t.blockedBy) == 0 {
-						m.namedQueue(t.Queue).pushTask(t)
-					}
-				}
-
 			default:
 				return fmt.Errorf("unknown WAL operation kind: %T", op)
 			}
@@ -314,15 +295,6 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, id := range task.BlockedBy {
-		// If a task cannot be found then it must have been processed
-		// and we can ignore it.
-		if t, ok := m.taskByID(id); ok {
-			t.blocking = append(t.blocking, &task)
-			task.blockedBy = append(task.blockedBy, t)
-		}
-	}
-
 	task.ID = m.genTaskID()
 	if n, err := m.walWr.Append(taskToOpAdd(&task)); err != nil {
 		return 0, fmt.Errorf("wall append: %w", err)
@@ -348,21 +320,11 @@ func (m *MemStore) taskByID(id uint32) (*Task, bool) {
 			if t.ID == id {
 				return t, true
 			}
-			for _, bt := range t.blocking {
-				if bt.ID == id {
-					return bt, true
-				}
-			}
 		}
 		for e := queue.delayed.Front(); e != nil; e = e.Next() {
 			t := e.Value.(*Task)
 			if t.ID == id {
 				return t, true
-			}
-			for _, bt := range t.blocking {
-				if bt.ID == id {
-					return bt, true
-				}
 			}
 		}
 	}
@@ -443,12 +405,6 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 				go m.walVacuum()
 			}
 
-			for _, t := range task.blocking {
-				t.blockedBy = deleteTaskRef(t.blockedBy, task)
-				if len(t.blockedBy) == 0 {
-					m.namedQueue(t.Queue).pushTask(t)
-				}
-			}
 			return nil
 		}
 
@@ -492,34 +448,6 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			batch = append(batch, taskToOpAdd(deadTasks[0]))
 		}
 
-		// If this task was blocking any other task execution, fail
-		// dependencies as well. Because this task will never succeed,
-		// all tasks that are blocked by this one will never be
-		// executed.
-		// Dependencies can have dependencies.
-		for _, t := range allBlocked(task, nil) {
-			q := m.namedQueue(t.Queue)
-			// Remove the task from the queue that it is registered
-			// with.
-			queueList := q.ready
-			if t.ExecuteAt != nil {
-				queueList = q.delayed
-			}
-			for el := queueList.Front(); el != nil; el = el.Next() {
-				if el.Value.(*Task).ID == t.ID {
-					queueList.Remove(el)
-					break
-				}
-			}
-			batch = append(batch, &wal.OpDelete{ID: t.ID})
-
-			if t.Deadqueue != "" {
-				dead := taskToDeadTask(t)
-				batch = append(batch, taskToOpAdd(dead))
-				deadTasks = append(deadTasks, dead)
-			}
-		}
-
 		if m.namedQueue(task.Queue).Empty() {
 			m.deleteMasenko(task.Queue)
 		}
@@ -535,43 +463,6 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 		return nil
 	}
 	return ErrNotFound
-}
-
-// allBlocking appends to given slice all tasks that are directly and
-// indirectly blocked by given task. Each task is listed only once.
-func allBlocked(root *Task, all []*Task) []*Task {
-	for _, t := range root.blocking {
-		if !containsTask(all, t) {
-			all = append(all, t)
-		}
-		all = allBlocked(t, all)
-	}
-	return all
-}
-
-func containsTask(all []*Task, t *Task) bool {
-	for _, tt := range all {
-		if tt.ID == t.ID {
-			return true
-		}
-	}
-	return false
-}
-
-// deleteTaskRef modifies given list of refenreces.
-func deleteTaskRef(references []*Task, t *Task) []*Task {
-	for i, ref := range references {
-		if ref != t {
-			continue
-		}
-		references[i] = references[len(references)-1]
-		references[len(references)-1] = nil
-		references = references[:len(references)-1]
-	}
-	if len(references) == 0 {
-		return nil
-	}
-	return references
 }
 
 // genTaskID returns the next free ID that should be assigned to a newly
@@ -633,17 +524,6 @@ func (m *MemStore) rebuildWAL() error {
 		} else {
 			newSize += n
 		}
-
-		for _, task := range allBlocked(t, nil) {
-			if _, ok := written[task.ID]; ok {
-				continue
-			}
-			if maxUint(task.BlockedBy) != t.ID {
-				continue
-			}
-			writeTask(task)
-		}
-
 	}
 
 	for _, t := range m.toack {
@@ -803,24 +683,6 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 		go tx.m.walVacuum()
 	}
 
-	for _, task := range tx.pushed {
-		for _, id := range task.BlockedBy {
-			if t, ok := tx.m.taskByID(id); ok {
-				t.blocking = append(t.blocking, task)
-				task.blockedBy = append(task.blockedBy, t)
-			}
-		}
-	}
-
-	for _, task := range tx.acked {
-		for _, t := range task.blocking {
-			t.blockedBy = deleteTaskRef(t.blockedBy, task)
-			if len(t.blockedBy) == 0 {
-				tx.m.namedQueue(t.Queue).pushTask(t)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -871,13 +733,6 @@ func (tq *namedQueue) popTask(now time.Time) (*Task, bool) {
 
 // pushTask adds task to this queue.
 func (tq *namedQueue) pushTask(t *Task) {
-	if len(t.blockedBy) > 0 {
-		// Blocked tasks are not queued. Instead they are referenced by
-		// the tasks that block them and pushed to a queue once the
-		// last blocking task is processed.
-		return
-	}
-
 	if t.ExecuteAt == nil {
 		tq.ready.PushBack(t)
 		return
@@ -906,7 +761,6 @@ func taskToOpAdd(task *Task) wal.Operation {
 		Deadqueue: task.Deadqueue,
 		ExecuteAt: task.ExecuteAt,
 		Retry:     task.Retry,
-		BlockedBy: task.BlockedBy,
 	}
 }
 
@@ -920,7 +774,6 @@ func opAddToTask(op *wal.OpAdd) *Task {
 		ExecuteAt: op.ExecuteAt,
 		Retry:     op.Retry,
 		Failures:  0,
-		BlockedBy: op.BlockedBy,
 	}
 }
 
@@ -934,10 +787,5 @@ func taskToDeadTask(t *Task) *Task {
 		ExecuteAt: nil,
 		Retry:     t.Retry,
 		Failures:  0,
-		BlockedBy: t.BlockedBy,
-		// Blocking functionality is not active
-		// in the dead letter queue.
-		blockedBy: nil,
-		blocking:  nil,
 	}
 }

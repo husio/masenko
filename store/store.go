@@ -30,14 +30,6 @@ type Task struct {
 	Retry uint8
 	// Failures is a counter for failed processing attempts.
 	Failures uint8
-	// BlockedBy is a list of task IDs that must be successfully executed
-	// before this task can be processed.
-	BlockedBy []uint32
-
-	// A list of tasks that are blocking this one from execution.
-	blocking []*Task
-	// A list of tasks that this one is blocking from execution.
-	blockedBy []*Task
 }
 
 // Queue is implemented by any task queue backend.
