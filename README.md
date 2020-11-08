@@ -3,7 +3,6 @@
 [![Docs](https://readthedocs.org/projects/masenko/badge/?version=latest&style=flat)](https://masenko.readthedocs.io/en/latest/)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-
 ![Logo](assets/masenko_logo.png)
 
 
