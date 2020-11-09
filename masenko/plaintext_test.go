@@ -27,8 +27,15 @@ func TestPlainTextCases(t *testing.T) {
 	}
 	for _, p := range paths {
 		t.Run(p, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+
+			serverConf := ServerConfiguration{
+				StoreDir:         tempdir(t),
+				ListenTCP:        fmt.Sprintf("localhost:%d", freePort(t)),
+				ListenPrometheus: fmt.Sprintf("localhost:%d", freePort(t)),
+				Heartbeat:        3 * time.Second,
+			}
 
 			// List of connected clients is dynamic and new clients
 			// should connect as soon as described by the test
@@ -52,7 +59,7 @@ func TestPlainTextCases(t *testing.T) {
 				}
 
 				for i := 0; i < 200; i++ {
-					conn, err := net.Dial("tcp", "localhost:12001")
+					conn, err := net.Dial("tcp", serverConf.ListenTCP)
 					if err == nil {
 						c := client{conn: conn, wr: conn, rd: bufio.NewReader(conn)}
 						clients[name] = c
@@ -70,12 +77,7 @@ func TestPlainTextCases(t *testing.T) {
 			}
 			defer fd.Close()
 
-			server, err := StartServer(ctx, ServerConfiguration{
-				StoreDir:         tempdir(t),
-				ListenTCP:        "localhost:12001",
-				ListenPrometheus: "localhost:12002",
-				Heartbeat:        3 * time.Second,
-			})
+			server, err := StartServer(ctx, serverConf)
 			if err != nil {
 				t.Fatalf("start server: %s", err)
 			}
@@ -173,4 +175,22 @@ func tempdir(t testing.TB) string {
 		_ = os.RemoveAll(dir)
 	})
 	return dir
+}
+
+func freePort(t testing.TB) int {
+	t.Helper()
+
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("cannot resolve localhost:0: %s", err)
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		t.Fatalf("cannot listen: %s", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+
 }
