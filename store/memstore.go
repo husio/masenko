@@ -96,12 +96,12 @@ func OpenMemStore(walDir string, vacuumSize uint64, logger *log.Logger, mc Metri
 type MetricCounter interface {
 	// IncrQueue increments the total amount of tasks in the queue with the
 	// given name.
-	IncrQueue(string)
+	IncrQueue(string, string)
 	// DecrQueue decrements the total amount of tasks in the queue with the
 	// given name.
-	DecrQueue(string)
+	DecrQueue(string, string)
 	// SetQueueSize sets the current queue size to given value.
-	SetQueueSize(string, int)
+	SetQueueSize(string, string, int)
 }
 
 // Size of the WAL write buffer. Should be big enough to acommodate all
@@ -124,12 +124,12 @@ func (m *MemStore) readWAL(nx *wal.OpNexter) error {
 			// All good.
 		case errors.Is(err, io.EOF):
 			for _, q := range m.queues {
+				m.metrics.SetQueueSize(q.name, "toack", 0)
+				m.metrics.SetQueueSize(q.name, "ready", q.ready.Len())
+				m.metrics.SetQueueSize(q.name, "delayed", q.delayed.Len())
 				if q.Empty() {
 					m.deleteMasenko(q.name)
-					m.metrics.SetQueueSize(q.name, 0)
-					continue
 				}
-				m.metrics.SetQueueSize(q.name, q.ready.Len()+q.delayed.Len())
 			}
 			return nil
 		default:
@@ -319,7 +319,11 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 	}
 
 	m.namedQueue(task.Queue).pushTask(&task)
-	m.metrics.IncrQueue(task.Queue)
+	if task.ExecuteAt != nil {
+		m.metrics.IncrQueue(task.Queue, "ready")
+	} else {
+		m.metrics.IncrQueue(task.Queue, "delayed")
+	}
 	return task.ID, nil
 }
 
@@ -383,6 +387,13 @@ func (m *MemStore) Pull(ctx context.Context, queues []string) (*Task, error) {
 					}
 					m.toack = append(m.toack, task)
 					m.mu.Unlock()
+
+					if task.ExecuteAt == nil {
+						m.metrics.DecrQueue(tq.name, "ready")
+					} else {
+						m.metrics.DecrQueue(tq.name, "delayed")
+					}
+					m.metrics.IncrQueue(tq.name, "toack")
 					return task, nil
 				}
 			}
@@ -421,7 +432,7 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			if m.vacuumSize != 0 && m.walSize > m.vacuumSize {
 				go m.walVacuum()
 			}
-			m.metrics.DecrQueue(task.Queue)
+			m.metrics.DecrQueue(task.Queue, "toack")
 			return nil
 		}
 
@@ -477,9 +488,9 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 
 		if deadTask != nil {
 			m.namedQueue(deadTask.Queue).pushTask(deadTask)
-			m.metrics.IncrQueue(deadTask.Queue)
+			m.metrics.IncrQueue(deadTask.Queue, "ready")
 		}
-		m.metrics.DecrQueue(task.Queue)
+		m.metrics.DecrQueue(task.Queue, "toack")
 
 		return nil
 	}
@@ -682,7 +693,13 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 	for _, op := range tx.ops {
 		switch op := op.(type) {
 		case *wal.OpAdd:
-			tx.m.namedQueue(op.Queue).pushTask(opAddToTask(op))
+			task := opAddToTask(op)
+			tx.m.namedQueue(op.Queue).pushTask(task)
+			if task.ExecuteAt != nil {
+				tx.m.metrics.IncrQueue(task.Queue, "delayed")
+			} else {
+				tx.m.metrics.IncrQueue(task.Queue, "ready")
+			}
 		case *wal.OpDelete:
 			hasAck = true
 			for i, task := range tx.m.toack {
@@ -693,6 +710,7 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 				tx.m.toack[i] = tx.m.toack[len(tx.m.toack)-1]
 				tx.m.toack = tx.m.toack[:len(tx.m.toack)-1]
 				tx.m.namedQueue(task.Queue).ntoack--
+				tx.m.metrics.IncrQueue(task.Queue, "toack")
 				break
 			}
 		default:

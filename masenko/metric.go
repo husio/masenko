@@ -30,7 +30,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: "masenko",
 			Name:      "tasks_total",
 			Help:      "The number of tasks in each queue ready to be fetched.",
-		}, []string{"queue"}),
+		}, []string{"queue", "kind"}),
 	}
 	if err := reg.Register(m.clients); err != nil {
 		return nil, fmt.Errorf("register clients: %w", err)
@@ -75,15 +75,15 @@ func (m *Metrics) IncrResponseErr()   { m.responses.With(prometheus.Labels{"verb
 func (m *Metrics) IncrResponseEmpty() { m.responses.With(prometheus.Labels{"verb": "EMPTY"}).Inc() }
 func (m *Metrics) IncrResponsePong()  { m.responses.With(prometheus.Labels{"verb": "PONG"}).Inc() }
 
-func (m *Metrics) IncrQueue(queueName string) {
+func (m *Metrics) IncrQueue(queueName, kind string) {
 	fmt.Println("incr", queueName)
-	m.queues.With(prometheus.Labels{"queue": queueName}).Inc()
+	m.queues.With(prometheus.Labels{"queue": queueName, "kind": kind}).Inc()
 }
-func (m *Metrics) DecrQueue(queueName string) {
+func (m *Metrics) DecrQueue(queueName, kind string) {
 	fmt.Println("decr", queueName)
-	m.queues.With(prometheus.Labels{"queue": queueName}).Dec()
+	m.queues.With(prometheus.Labels{"queue": queueName, "kind": kind}).Dec()
 }
 
-func (m *Metrics) SetQueueSize(queueName string, n int) {
-	m.queues.With(prometheus.Labels{"queue": queueName}).Set(float64(n))
+func (m *Metrics) SetQueueSize(queueName, kind string, n int) {
+	m.queues.With(prometheus.Labels{"queue": queueName, "kind": kind}).Set(float64(n))
 }

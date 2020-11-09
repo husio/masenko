@@ -481,7 +481,7 @@ type counter struct {
 	queues map[string]int64
 }
 
-func (c *counter) IncrQueue(queueName string) {
+func (c *counter) IncrQueue(queueName, kind string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.queues == nil {
@@ -489,7 +489,7 @@ func (c *counter) IncrQueue(queueName string) {
 	}
 	c.queues[queueName]++
 }
-func (c *counter) DecrQueue(queueName string) {
+func (c *counter) DecrQueue(queueName, kind string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.queues == nil {
@@ -504,7 +504,7 @@ func (c *counter) Reset() {
 	c.queues = make(map[string]int64)
 }
 
-func (c *counter) SetQueueSize(queueName string, n int) {
+func (c *counter) SetQueueSize(queueName, kind string, n int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.queues == nil {
