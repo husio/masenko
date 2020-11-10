@@ -319,7 +319,7 @@ func (m *MemStore) Push(ctx context.Context, task Task) (uint32, error) {
 	}
 
 	m.namedQueue(task.Queue).pushTask(&task)
-	if task.ExecuteAt != nil {
+	if task.ExecuteAt == nil {
 		m.metrics.IncrQueue(task.Queue, "ready")
 	} else {
 		m.metrics.IncrQueue(task.Queue, "delayed")
@@ -695,10 +695,10 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 		case *wal.OpAdd:
 			task := opAddToTask(op)
 			tx.m.namedQueue(op.Queue).pushTask(task)
-			if task.ExecuteAt != nil {
-				tx.m.metrics.IncrQueue(task.Queue, "delayed")
-			} else {
+			if task.ExecuteAt == nil {
 				tx.m.metrics.IncrQueue(task.Queue, "ready")
+			} else {
+				tx.m.metrics.IncrQueue(task.Queue, "delayed")
 			}
 		case *wal.OpDelete:
 			hasAck = true
