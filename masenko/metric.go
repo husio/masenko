@@ -76,11 +76,9 @@ func (m *Metrics) IncrResponseEmpty() { m.responses.With(prometheus.Labels{"verb
 func (m *Metrics) IncrResponsePong()  { m.responses.With(prometheus.Labels{"verb": "PONG"}).Inc() }
 
 func (m *Metrics) IncrQueue(queueName, kind string) {
-	fmt.Println("incr", queueName)
 	m.queues.With(prometheus.Labels{"queue": queueName, "kind": kind}).Inc()
 }
 func (m *Metrics) DecrQueue(queueName, kind string) {
-	fmt.Println("decr", queueName)
 	m.queues.With(prometheus.Labels{"queue": queueName, "kind": kind}).Dec()
 }
 

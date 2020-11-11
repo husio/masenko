@@ -457,12 +457,14 @@ func (m *MemStore) Acknowledge(ctx context.Context, taskID uint32, ack bool) err
 			executeAt := m.now().Add(delay).Truncate(time.Second)
 
 			task.ExecuteAt = &executeAt
-			m.namedQueue(task.Queue).pushTask(task)
-			if n, err := m.walWr.Append(&wal.OpFail{ID: task.ID, ExecuteAt: executeAt}); err != nil {
+			n, err := m.walWr.Append(&wal.OpFail{ID: task.ID, ExecuteAt: executeAt})
+			if err != nil {
 				return fmt.Errorf("wal append: %w", err)
-			} else {
-				m.walSize += uint64(n)
 			}
+			m.walSize += uint64(n)
+			m.namedQueue(task.Queue).pushTask(task)
+			m.metrics.IncrQueue(task.Queue, "delayed")
+			m.metrics.DecrQueue(task.Queue, "toack")
 			return nil
 		}
 
@@ -688,18 +690,20 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 	}
 	tx.m.walSize += uint64(n)
 
-	var hasAck bool
+	for _, task := range tx.pushed {
+		tx.m.namedQueue(task.Queue).pushTask(task)
+		if task.ExecuteAt == nil {
+			tx.m.metrics.IncrQueue(task.Queue, "ready")
+		} else {
+			tx.m.metrics.IncrQueue(task.Queue, "delayed")
+		}
+	}
 
+	var hasAck bool
 	for _, op := range tx.ops {
 		switch op := op.(type) {
 		case *wal.OpAdd:
-			task := opAddToTask(op)
-			tx.m.namedQueue(op.Queue).pushTask(task)
-			if task.ExecuteAt == nil {
-				tx.m.metrics.IncrQueue(task.Queue, "ready")
-			} else {
-				tx.m.metrics.IncrQueue(task.Queue, "delayed")
-			}
+			// Those were added earlier.
 		case *wal.OpDelete:
 			hasAck = true
 			for i, task := range tx.m.toack {
@@ -710,7 +714,7 @@ func (tx *MemStoreTransaction) Commit(ctx context.Context) error {
 				tx.m.toack[i] = tx.m.toack[len(tx.m.toack)-1]
 				tx.m.toack = tx.m.toack[:len(tx.m.toack)-1]
 				tx.m.namedQueue(task.Queue).ntoack--
-				tx.m.metrics.IncrQueue(task.Queue, "toack")
+				tx.m.metrics.DecrQueue(task.Queue, "toack")
 				break
 			}
 		default:

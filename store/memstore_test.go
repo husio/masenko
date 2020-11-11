@@ -17,6 +17,233 @@ import (
 	"github.com/husio/masenko/store/wal"
 )
 
+func TestStoreQueueMetric(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	nowPlus := func(d time.Duration) *time.Time {
+		t := now.Add(d)
+		return &t
+	}
+
+	dir := tempdir(t)
+
+	var metrics counter
+	store, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
+	if err != nil {
+		t.Fatalf("cannot open store with an empty directory: %s", err)
+	}
+	store.now = func() time.Time { return now }
+	defer store.Close()
+
+	if _, err := store.Push(ctx, Task{
+		Name:      "one",
+		Queue:     "a",
+		Retry:     5,
+		Deadqueue: "dead",
+	}); err != nil {
+		t.Fatalf("push: %s", err)
+	}
+	assertCounters(t, &metrics, "a", 1, 0, 0)
+
+	if _, err := store.Push(ctx, Task{
+		Name:      "two",
+		Queue:     "a",
+		ExecuteAt: nowPlus(-time.Hour),
+		Retry:     0,
+		Deadqueue: "dead",
+	}); err != nil {
+		t.Fatalf("push: %s", err)
+	}
+	assertCounters(t, &metrics, "a", 1, 1, 0)
+
+	taskTwo, err := store.Pull(ctx, []string{"a"})
+	if err != nil {
+		t.Fatalf("pull: %s", err)
+	}
+	if taskTwo.Name != "two" {
+		t.Fatalf("task two has execute at in the past, so it should be returned first, got %+v", taskTwo)
+	}
+	assertCounters(t, &metrics, "a", 1, 0, 1)
+
+	taskOne, err := store.Pull(ctx, []string{"a"})
+	if err != nil {
+		t.Fatalf("pull: %s", err)
+	}
+	assertCounters(t, &metrics, "a", 0, 0, 2)
+
+	if err := store.Acknowledge(ctx, taskOne.ID, false); err != nil {
+		t.Fatalf("nack one: %s", err)
+	}
+	assertCounters(t, &metrics, "a", 0, 1, 1)
+	assertCounters(t, &metrics, "dead", 0, 0, 0)
+
+	if err := store.Acknowledge(ctx, taskTwo.ID, false); err != nil {
+		t.Fatalf("nack two: %s", err)
+	}
+	assertCounters(t, &metrics, "a", 0, 1, 0)
+	assertCounters(t, &metrics, "dead", 1, 0, 0)
+
+	// Move the clock to the future, because NACK caused task one to be
+	// scheduled for returning in the future.
+	now = now.Add(time.Hour)
+
+	taskOne, err = store.Pull(ctx, []string{"a"})
+	if err != nil {
+		t.Fatalf("pull: %s", err)
+	}
+	if taskOne.Name != "one" {
+		t.Fatalf("want task one, got %+v", taskOne)
+	}
+	assertCounters(t, &metrics, "a", 0, 0, 1)
+	assertCounters(t, &metrics, "dead", 1, 0, 0)
+	if err := store.Acknowledge(ctx, taskOne.ID, true); err != nil {
+		t.Fatalf("ack one: %s", err)
+	}
+	assertCounters(t, &metrics, "a", 0, 0, 0)
+	assertCounters(t, &metrics, "dead", 1, 0, 0)
+}
+
+func assertCounters(t testing.TB, metrics *counter, queueName string, ready, delayed, toack int64) {
+	t.Helper()
+
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+
+	if got := metrics.Value(queueName, "ready"); got != ready {
+		t.Errorf("want %s:ready to have %d, got %d", queueName, ready, got)
+	}
+	if got := metrics.Value(queueName, "delayed"); got != delayed {
+		t.Errorf("want %s:delayed to have %d, got %d", queueName, delayed, got)
+	}
+	if got := metrics.Value(queueName, "toack"); got != toack {
+		t.Errorf("want %s:toack to have %d, got %d", queueName, toack, got)
+	}
+}
+
+func TestStoreQueueMetricInTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	nowPlus := func(d time.Duration) *time.Time {
+		t := now.Add(d)
+		return &t
+	}
+
+	dir := tempdir(t)
+
+	var metrics counter
+	store, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
+	if err != nil {
+		t.Fatalf("cannot open store with an empty directory: %s", err)
+	}
+	store.now = func() time.Time { return now }
+	defer store.Close()
+
+	tx := store.Begin(ctx)
+	if _, err := tx.Push(ctx, Task{Name: "one", Queue: "q"}); err != nil {
+		t.Fatalf("push: %s", err)
+	}
+	if _, err := tx.Push(ctx, Task{Name: "two", Queue: "q", ExecuteAt: nowPlus(-time.Minute)}); err != nil {
+		t.Fatalf("push: %s", err)
+	}
+
+	// Transaction was not yet commited.
+	assertCounters(t, &metrics, "q", 0, 0, 0)
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %s", err)
+	}
+
+	assertCounters(t, &metrics, "q", 1, 1, 0)
+
+	_, err = store.Pull(ctx, []string{"q"})
+	if err != nil {
+		t.Fatalf("pull: %s", err)
+	}
+	taskOne, err := store.Pull(ctx, []string{"q"})
+	if err != nil {
+		t.Fatalf("pull: %s", err)
+	}
+
+	assertCounters(t, &metrics, "q", 0, 0, 2)
+
+	tx = store.Begin(ctx)
+	if _, err := tx.Push(ctx, Task{Name: "one", Queue: "q"}); err != nil {
+		t.Fatalf("push: %s", err)
+	}
+	if err := tx.Acknowledge(ctx, taskOne.ID, true); err != nil {
+		t.Fatalf("ack task one: %s", err)
+	}
+
+	// Transaction was not yet commited.
+	assertCounters(t, &metrics, "q", 0, 0, 2)
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit second transaction: %s", err)
+	}
+	assertCounters(t, &metrics, "q", 1, 0, 1)
+}
+
+func TestStoreQueueMetricOpen(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	dir := tempdir(t)
+	var metrics counter
+
+	(func() {
+		future := time.Now().Add(time.Hour)
+		store, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
+		if err != nil {
+			t.Fatalf("cannot open store with an empty directory: %s", err)
+		}
+		defer store.Close()
+
+		if _, err := store.Push(ctx, Task{Name: "one", Queue: "a"}); err != nil {
+			t.Fatalf("push: %s", err)
+		}
+		if _, err := store.Push(ctx, Task{Name: "two", Queue: "a"}); err != nil {
+			t.Fatalf("push: %s", err)
+		}
+		if _, err := store.Push(ctx, Task{Name: "three", Queue: "b"}); err != nil {
+			t.Fatalf("push: %s", err)
+		}
+		if _, err := store.Push(ctx, Task{Name: "four", Queue: "b", ExecuteAt: &future}); err != nil {
+			t.Fatalf("push: %s", err)
+		}
+		if _, err := store.Pull(ctx, []string{"a"}); err != nil {
+			t.Fatalf("pull: %s", err)
+		}
+		assertCounters(t, &metrics, "a", 1, 0, 1)
+		assertCounters(t, &metrics, "b", 1, 1, 0)
+	}())
+
+	t.Run("opening using existing metrics store", func(t *testing.T) {
+		store, err := OpenMemStore(dir, 1e6, testlog(t), &metrics)
+		if err != nil {
+			t.Fatalf("cannot open an existing store: %s", err)
+		}
+		_ = store.Close()
+
+		assertCounters(t, &metrics, "a", 2, 0, 0)
+		assertCounters(t, &metrics, "b", 1, 1, 0)
+	})
+
+	t.Run("opening using existing an empty metrics store", func(t *testing.T) {
+		var fresh counter
+		store, err := OpenMemStore(dir, 1e6, testlog(t), &fresh)
+		if err != nil {
+			t.Fatalf("cannot open an existing store: %s", err)
+		}
+		_ = store.Close()
+
+		assertCounters(t, &fresh, "a", 2, 0, 0)
+		assertCounters(t, &fresh, "b", 1, 1, 0)
+	})
+}
+
 func TestOpenStore(t *testing.T) {
 	cases := map[string]struct {
 		Ops func(context.Context, testing.TB, *MemStore)
@@ -487,7 +714,7 @@ func (c *counter) IncrQueue(queueName, kind string) {
 	if c.queues == nil {
 		c.queues = make(map[string]int64)
 	}
-	c.queues[queueName]++
+	c.queues[queueName+":"+kind]++
 }
 func (c *counter) DecrQueue(queueName, kind string) {
 	c.mu.Lock()
@@ -495,7 +722,7 @@ func (c *counter) DecrQueue(queueName, kind string) {
 	if c.queues == nil {
 		c.queues = make(map[string]int64)
 	}
-	c.queues[queueName]--
+	c.queues[queueName+":"+kind]--
 }
 
 func (c *counter) Reset() {
@@ -510,5 +737,12 @@ func (c *counter) SetQueueSize(queueName, kind string, n int) {
 	if c.queues == nil {
 		c.queues = make(map[string]int64)
 	}
-	c.queues[queueName] = int64(n)
+	c.queues[queueName+":"+kind] = int64(n)
+}
+
+func (c *counter) Value(queueName, kind string) int64 {
+	if c.queues == nil {
+		return 0
+	}
+	return c.queues[queueName+":"+kind]
 }
