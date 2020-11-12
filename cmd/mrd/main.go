@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"flag"
@@ -25,7 +26,9 @@ Usage of %s:
 `, os.Args[0])
 		flag.PrintDefaults()
 	}
-	addrFl := flag.String("a", "localhost:12345", "Masenko server address.")
+	addrFl := flag.String("address", "localhost:12345", "Masenko server address.")
+	readRespFl := flag.Uint("responses", 1, "Read given amount of responses before terminating.")
+	noVerbFl := flag.Bool("noverb", false, "If set, do not show response verb, only payload.")
 	flag.Parse()
 
 	c, err := net.Dial("tcp", *addrFl)
@@ -44,40 +47,35 @@ Usage of %s:
 		die("copy: %s\n", err)
 	}
 
-	var (
-		isErr bool
-		buf   = make([]byte, 1024)
-	)
-	for read := true; read; {
-		n, err := c.Read(buf)
+	rd := bufio.NewReader(c)
+	for wantResp := *readRespFl; wantResp > 0; wantResp-- {
+		line, err := rd.ReadBytes('\n')
 		if err != nil {
 			if err != io.EOF {
 				die("read: %s\n", err)
 			}
-			if n == 0 {
-				return
-			}
 		}
-		data := buf[:n]
-		for i, c := range data {
-			if c == '\n' {
-				data = data[:i]
-				read = false
-				break
-			}
+		if len(line) == 0 {
+			return
 		}
-		if bytes.HasPrefix(data, []byte("ERR ")) {
-			isErr = true
+		hasErr := bytes.HasPrefix(line, []byte("ERR "))
+		if *noVerbFl {
+			line = cutVerb(line)
 		}
-
-		_, _ = os.Stdout.Write(data)
+		_, _ = os.Stdout.Write(line)
+		if hasErr {
+			os.Exit(3)
+		}
 	}
+}
 
-	if isErr {
-		os.Exit(3)
-	} else {
-		os.Exit(0)
+func cutVerb(b []byte) []byte {
+	for i, c := range b {
+		if c == ' ' {
+			return b[i+1:]
+		}
 	}
+	return b
 }
 
 func die(format string, args ...interface{}) {
