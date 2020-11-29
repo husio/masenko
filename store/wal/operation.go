@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+type OperationKind uint8
+
+const (
+	opKindAdd = 1 << iota
+	opKindDelete
+	opKindFail
+	opKindNextID
+)
+
+type Operation interface {
+	Serialize([]byte) (int, error)
+	Deserialize([]byte) error
+}
+
 type OpAppender struct {
 	cw  *ChecksumWriter
 	buf []byte
@@ -92,20 +106,6 @@ func (or *OpNexter) Next() ([]Operation, error) {
 		buf = buf[2+size:]
 	}
 	return operations, nil
-}
-
-type OperationKind uint8
-
-const (
-	opKindAdd = 1 << iota
-	opKindDelete
-	opKindFail
-	opKindNextID
-)
-
-type Operation interface {
-	Serialize([]byte) (int, error)
-	Deserialize([]byte) error
 }
 
 func DeserializeOperation(b []byte) (Operation, error) {
