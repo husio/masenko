@@ -7,17 +7,15 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/husio/masenko/store/wal"
 )
 
-func TestStoreQueueMetric(t *testing.T) {
+func TestMemStoreQueueMetric(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -122,7 +120,7 @@ func assertCounters(t testing.TB, metrics *counter, queueName string, ready, del
 	}
 }
 
-func TestStoreQueueMetricInTransaction(t *testing.T) {
+func TestMemStoreQueueMetricInTransaction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -187,7 +185,7 @@ func TestStoreQueueMetricInTransaction(t *testing.T) {
 	assertCounters(t, &metrics, "q", 1, 0, 1)
 }
 
-func TestStoreQueueMetricOpen(t *testing.T) {
+func TestMemStoreQueueMetricOpen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	dir := tempdir(t)
@@ -244,7 +242,7 @@ func TestStoreQueueMetricOpen(t *testing.T) {
 	})
 }
 
-func TestOpenStore(t *testing.T) {
+func TestOpenMemStore(t *testing.T) {
 	cases := map[string]struct {
 		Ops func(context.Context, testing.TB, *MemStore)
 	}{
@@ -412,7 +410,7 @@ func queueNames(queues []*namedQueue) []string {
 	return names
 }
 
-func TestWALVacuum(t *testing.T) {
+func TestMemStoreWALVacuum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -515,7 +513,7 @@ func assertWALCount(t testing.TB, walDir string, wantFiles uint) {
 	}
 }
 
-func BenchmarkSwitchWAL(b *testing.B) {
+func BenchmarkMemStoreSwitchWAL(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -549,9 +547,6 @@ func BenchmarkSwitchWAL(b *testing.B) {
 }
 
 func BenchmarkMemStorePush(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	var metrics counter
 	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b), &metrics)
 	if err != nil {
@@ -561,35 +556,10 @@ func BenchmarkMemStorePush(b *testing.B) {
 
 	store.vacuumSize = 0 // Disable vacuum.
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			task, err := store.Pull(ctx, []string{"myqueue"})
-			if err != nil {
-				panic(err)
-			}
-			if err := store.Acknowledge(ctx, task.ID, true); err != nil {
-				panic(err)
-			}
-		}
-	}()
-
-	task := Task{Queue: "myqueue", Name: "a-task"}
-	for i := 0; i < b.N; i++ {
-		if _, err := store.Push(ctx, task); err != nil {
-			b.Fatalf("push task: %s", err)
-		}
-	}
-
-	wg.Wait()
+	benchmarkPush(b, store)
 }
 
 func BenchmarkMemStorePull(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	var metrics counter
 	store, err := OpenMemStore(tempdir(b), 1e6, testlog(b), &metrics)
 	if err != nil {
@@ -599,51 +569,7 @@ func BenchmarkMemStorePull(b *testing.B) {
 
 	store.vacuumSize = 0 // Disable vacuum.
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			if _, err := store.Push(ctx, Task{Queue: "myqueue", Name: "a-task"}); err != nil {
-				panic("push task: " + err.Error())
-			}
-		}
-	}()
-
-	for i := 0; i < b.N; i++ {
-		task, err := store.Pull(ctx, []string{"myqueue"})
-		if err != nil {
-			b.Fatalf("cannot pull: %s", err)
-		}
-		if err := store.Acknowledge(ctx, task.ID, true); err != nil {
-			b.Fatalf("cannot ack: %s", err)
-		}
-	}
-
-	wg.Wait()
-}
-
-func tempdir(t testing.TB) string {
-	t.Helper()
-
-	dir, err := ioutil.TempDir(os.TempDir(), "masenko-tests-*")
-	if err != nil {
-		t.Fatalf("cannot create temporary directory: %s", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(dir)
-	})
-	return dir
-}
-
-func testlog(t testing.TB) *log.Logger {
-	t.Helper()
-
-	if !testing.Verbose() {
-		return log.New(ioutil.Discard, "", 0)
-	}
-
-	return log.New(ioutil.Discard, t.Name(), log.Lshortfile)
+	benchmarkPull(b, store)
 }
 
 func assertTaskListsEqual(t testing.TB, a, b *list.List) {
@@ -701,48 +627,4 @@ func readWal(t testing.TB, s *MemStore) {
 			entryNo++
 		}
 	}
-}
-
-type counter struct {
-	mu     sync.Mutex
-	queues map[string]int64
-}
-
-func (c *counter) IncrQueue(queueName, kind string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.queues == nil {
-		c.queues = make(map[string]int64)
-	}
-	c.queues[queueName+":"+kind]++
-}
-func (c *counter) DecrQueue(queueName, kind string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.queues == nil {
-		c.queues = make(map[string]int64)
-	}
-	c.queues[queueName+":"+kind]--
-}
-
-func (c *counter) Reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.queues = make(map[string]int64)
-}
-
-func (c *counter) SetQueueSize(queueName, kind string, n int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.queues == nil {
-		c.queues = make(map[string]int64)
-	}
-	c.queues[queueName+":"+kind] = int64(n)
-}
-
-func (c *counter) Value(queueName, kind string) int64 {
-	if c.queues == nil {
-		return 0
-	}
-	return c.queues[queueName+":"+kind]
 }

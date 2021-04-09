@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
-	"math/rand"
 	"os"
 	"path"
 	"regexp"
@@ -31,7 +30,6 @@ type MemStore struct {
 	metrics MetricCounter
 
 	mu         sync.Mutex
-	rand       rand.Rand
 	walSize    uint64
 	walWr      *wal.OpAppender
 	walFd      io.Closer
